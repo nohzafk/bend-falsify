@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, counterImports, duplicateSections, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
+import { type Law, coreAlias, counterImports, duplicateSections, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -36,6 +36,28 @@ test("the project sits under its real ancestors, deep enough for every import", 
 test("the counterexample file imports the core as C and the laws' other imports", () => {
   const h = counterImports("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S\n\nlaw x:\n");
   expect(h).toBe("import Base\nimport ./core.bend as C\nimport ../../s/core.bend as S");
+  // under another alias, for an `at` instance: the law's statement as written
+  // says `Core.`, so that is the name the file has to give the core
+  expect(counterImports("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S\n", "Core"))
+    .toBe("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S");
+});
+
+test("the core's alias is the one LAWS.bend imports it under", () => {
+  expect(coreAlias("import Base\nimport ./core.bend as Core\n")).toBe("Core");
+  expect(coreAlias("import Base\nimport ./core.bend as C\n")).toBe("C");
+  expect(coreAlias("import Base\nimport ./core.bend as Core2\n\nlaw x:\n")).toBe("Core2");
+  // laws that name no core: C, which is what the tool has always used
+  expect(coreAlias("import Base\nimport ./sub/k.bend as K\n")).toBe("C");
+  expect(coreAlias("import Base\nimport ../shared.bend as S\n")).toBe("C");
+});
+
+test("an at instance is built under the alias LAWS.bend uses", () => {
+  const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/aliased`);
+  expect(r.out).toContain("PASS: all 2 mutants");
+  // the second row is hand-written, and names the core `C` whatever the laws
+  // call it: its line says it is not tied to the law
+  expect(r.out).toContain("(counter not tied to the law)");
+  expect(r.code).toBe(0);
 });
 
 test("a mutation replaces exactly one whole line, or refuses", () => {

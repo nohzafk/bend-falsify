@@ -11,7 +11,8 @@
 #   4. the mutant table's newer refusals: an instance the mutation does not
 #      move, at without a binder's value, an import that names nothing --
 #      which is what a file import would look like unwired -- and two sections
-#      under one header
+#      under one header; and the fixture whose LAWS.bend aliases the core,
+#      where an `at` row passes and a `counter` row still names the core `C`
 #   5. the source typechecks
 #
 # Usage: sh test.sh
@@ -91,6 +92,17 @@ sed 's/"at": { "n": "1n" }/"at": { }/' "$TMP/tree-nobinder/group/proj/mutants.js
 mv "$TMP/m" "$TMP/tree-nobinder/group/proj/mutants.json"
 bun src/falsify.ts mutants "$TMP/tree-nobinder/group/proj" | grep -q 'at gives no value for the binder "n"' || { echo "FAIL: at with a binder left out was not refused"; exit 1; }
 echo "  at with a binder left out is refused"
+
+# A law whose LAWS.bend imports the core under an alias other than C. An `at`
+# instance is the law's statement as written, so the file it is checked in has
+# to import the core under that alias -- a file that always said `C` would
+# refuse the instance as a name that is not in scope. The fixture's second row
+# is a hand-written `counter`, which names the core `C` whatever the laws call
+# it, and says on its line that nothing ties it to the law.
+bun src/falsify.ts mutants test/tree/aliased > /tmp/bend-falsify-aliased.log 2>&1 || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: the fixture whose laws alias the core"; exit 1; }
+grep -q "PASS: all 2 mutants" /tmp/bend-falsify-aliased.log || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: the fixture whose laws alias the core"; exit 1; }
+grep -q "(counter not tied to the law)" /tmp/bend-falsify-aliased.log || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: a counter row did not say it is untied"; exit 1; }
+echo "  an at instance is built under the alias LAWS.bend imports the core as"
 
 # An import that names nothing stops the run by name -- the file that makes it,
 # and the import -- before any check runs.
