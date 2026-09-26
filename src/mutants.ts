@@ -46,6 +46,10 @@ export interface Mutant {
   // hold on the core and fail on the mutant: that is what makes `why` true.
   counter: string;
   failsIn: string; // the def the checker must name
+  // When `from` occurs more than once in core.bend, which occurrence (1 =
+  // first). Without it a repeated line is refused: the mutant would be
+  // ambiguous.
+  nth?: number;
   // Other laws' sections this proof builds on, kept (with their laws) in the
   // run. A law proved from other laws cannot be checked alone.
   with?: string[];
@@ -73,18 +77,23 @@ export function onlyLaws(text: string, keep: string[]): string {
 
 // Replace exactly one whole line of the core, or refuse: a mutation that does
 // not apply would make the mutant identical to the control.
-export function mutate(text: string, from: string, to: string, law: string): string {
+export function mutate(text: string, from: string, to: string, law: string, nth?: number): string {
   const lines = text.split("\n");
-  const hit = lines.indexOf(from);
-  if (hit < 0) throw new Error(`${law}: the line to mutate is not in core.bend: ${JSON.stringify(from)}`);
-  if (lines.indexOf(from, hit + 1) >= 0) throw new Error(`${law}: the line to mutate occurs more than once in core.bend: ${JSON.stringify(from)}`);
+  const hits = lines.flatMap((l, i) => (l === from ? [i] : []));
+  if (hits.length === 0) throw new Error(`${law}: the line to mutate is not in core.bend: ${JSON.stringify(from)}`);
+  if (nth === undefined && hits.length > 1) {
+    throw new Error(`${law}: the line to mutate occurs ${hits.length} times in core.bend (lines ${hits.map((i) => i + 1).join(", ")}); say which with nth: ${JSON.stringify(from)}`);
+  }
+  const hit = hits[(nth ?? 1) - 1];
+  if (hit === undefined) throw new Error(`${law}: nth ${nth}, but the line occurs ${hits.length} times in core.bend: ${JSON.stringify(from)}`);
   lines[hit] = to;
   return lines.join("\n");
 }
 
 // The directories a project imports by a relative path that leaves it
 // ("../base-facts", "../../bend-schema"), and how many levels the deepest
-// one climbs. An import inside the project ("./x") is copied with it.
+// one climbs. The project directory itself is copied whole, so an import
+// inside it ("./x", "./dir/x") resolves too.
 export function relativeImports(texts: string[]): { dirs: string[]; depth: number } {
   const dirs = [...new Set(texts.flatMap((text) =>
     [...text.matchAll(/^import ((?:\.\.\/)+)([^/\s]+)\//gm)].map((m) => `${m[1]}${m[2]}`)))];
@@ -100,6 +109,8 @@ export function placeProject(root: string, projectDir: string, depth: number): s
   if (parts.length <= depth) throw new Error(`${abs}: imports climb ${depth} levels, past the filesystem root`);
   return join(root, ...parts.slice(parts.length - 1 - depth));
 }
+
+const SKIP = (src: string) => !/(^|\/)(node_modules|\.git)$/.test(src);
 
 function inside(root: string, p: string): boolean {
   const r = relative(root, p);
@@ -125,14 +136,16 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     const root = mkdtempSync(join(tmpdir(), "bend-mutant-"));
     try {
       const dir = placeProject(root, projectDir, depth);
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dirname(dir), { recursive: true });
+      cpSync(resolve(projectDir), dir, { recursive: true, filter: SKIP });
       for (const rel of imports) {
         const from = resolve(projectDir, rel);
         const to = resolve(dir, rel);
         if (!inside(root, to)) throw new Error(`import ${rel}: would land outside the scratch tree`);
         if (!existsSync(from)) throw new Error(`import ${rel}: ${from} does not exist`);
         mkdirSync(dirname(to), { recursive: true });
-        cpSync(from, to, { recursive: true, filter: (src) => !/(^|\/)(node_modules|\.git)$/.test(src) });
+        if (existsSync(to)) continue; // already copied: it sits inside the project
+        cpSync(from, to, { recursive: true, filter: SKIP });
       }
       writeFileSync(join(dir, "core.bend"), coreText);
       writeFileSync(join(dir, "LAWS.bend"), lawsText);
@@ -177,7 +190,14 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       bad += 1;
       continue;
     }
-    const mutated = mutate(core, m.from, m.to, m.law);
+    let mutated: string;
+    try {
+      mutated = mutate(core, m.from, m.to, m.law, m.nth);
+    } catch (e) {
+      console.log(`  ${name} FAIL  ${(e as Error).message}`);
+      bad += 1;
+      continue;
+    }
     const withLaws = (m.with ?? []).map(lawOf);
     const cControl = counterHolds(core, m);
     const cMutant = cControl.ok ? counterHolds(mutated, m) : { ok: true, out: "" };

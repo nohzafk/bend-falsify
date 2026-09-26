@@ -22,10 +22,12 @@ test("the project sits under its real ancestors, deep enough for every import", 
 test("a mutation replaces exactly one whole line, or refuses", () => {
   expect(mutate("a\nb\nc", "b", "x", "L")).toBe("a\nx\nc");
   expect(() => mutate("a\nb", "z", "x", "L")).toThrow("not in core.bend");
-  expect(() => mutate("b\nb", "b", "x", "L")).toThrow("more than once");
+  expect(() => mutate("b\nb", "b", "x", "L")).toThrow("occurs 2 times");
+  expect(mutate("b\nb", "b", "x", "L", 2)).toBe("b\nx");
+  expect(() => mutate("b\nb", "b", "x", "L", 3)).toThrow("nth 3");
 });
 
-test("right mutants pass, through an import two levels up", () => {
+test("right mutants pass, through an import two levels up and one in a subdirectory", () => {
   const r = run("fixture_ok.ts");
   expect(r.out).toContain("PASS: all 2 mutants");
   expect(r.code).toBe(0);
@@ -36,6 +38,7 @@ for (const [i, says] of [
   [1, "still holds on the mutant"],
   [2, "not LAWS.keep_same"],
   [3, "no counterexample"],
+  [4, "occurs 2 times"],
 ] as const) {
   test(`a wrong mutant is refused: ${says}`, () => {
     const r = run("fixture_bad.ts", String(i));

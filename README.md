@@ -55,7 +55,8 @@ runMutants(import.meta.dir, MUTANTS);
 ```
 
 - A law proved from other laws names their sections in `with`.
-- The scratch tree mirrors the project's place in the filesystem as far as its relative imports climb (`../x`, `../../x`, …). It copies only the project and the directories it imports, and it never writes outside its own temp root.
+- When the `from` line occurs more than once in `core.bend`, `nth` says which occurrence (1 is the first). Without it, a repeated line is refused as ambiguous.
+- The scratch tree mirrors the project's place in the filesystem as far as its relative imports climb (`../x`, `../../x`, …). It copies the project directory whole, with its subdirectories, plus the directories it imports, and it never writes outside its own temp root.
 
 ## Gate
 
