@@ -17,6 +17,7 @@
     "src/index.ts",
     "src/mutants.ts",
     "src/falsify.ts",
+    "examples",
     "LICENSE",
     "README.md"
   ]

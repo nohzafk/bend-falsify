@@ -1,0 +1,19 @@
+{
+  "imports": [
+    "./core.bend as C"
+  ],
+  "instances": [
+    {
+      "name": "plus0_three",
+      "claim": "{C.plus0(3n) == 3n : Nat}"
+    },
+    {
+      "name": "plus0_slow_three",
+      "claim": "{C.plus0_slow(3n) == 3n : Nat}"
+    },
+    {
+      "name": "twice_seven",
+      "claim": "{C.plus0_twice(7n) == 7n : Nat}"
+    }
+  ]
+}
