@@ -48,7 +48,7 @@ const MUTANTS: Mutant[] = [
   { law: "keep_same", section: "keep is the identity",
     from: "  Nat.add(n, 0n)", to: "  Nat.add(n, 1n)",   // one whole line of core.bend
     why: "keep adds one",
-    counter: "{C.keep(0n) == 0n : Nat}",              // over the core `as C`; holds, then fails
+    counter: "{C.keep(0n) == 0n : Nat}",              // over the core `as C` and LAWS.bend's other imports; holds, then fails
     failsIn: "LAWS.keep_same" },                      // the def the checker must name
 ];
 runMutants(import.meta.dir, MUTANTS);

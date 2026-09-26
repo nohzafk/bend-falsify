@@ -42,7 +42,7 @@ export interface Mutant {
   to: string;
   why: string; // why the law is false afterwards, in words
   // An instance of the law at literals, as a Bend equation over the core
-  // imported `as C` -- e.g. "{C.charge(C.plan1, 3n) == 30n : Nat}". It must
+  // imported `as C`, and whatever else LAWS.bend imports, by its alias -- e.g. "{C.charge(C.plan1, 3n) == 30n : Nat}". It must
   // hold on the core and fail on the mutant: that is what makes `why` true.
   counter: string;
   failsIn: string; // the def the checker must name
@@ -101,6 +101,17 @@ export function relativeImports(texts: string[]): { dirs: string[]; depth: numbe
   return { dirs, depth };
 }
 
+// The counterexample file's imports: the core as C, and every other import
+// LAWS.bend has, so a claim can name what a law's statement names (another
+// package's error type, say). LAWS.bend's own import of the core is left out:
+// one file under two names is a checker error.
+export function counterImports(laws: string): string {
+  const others = [...laws.matchAll(/^import (\S+)(?: as (\S+))?\s*$/gm)]
+    .filter(([, path]) => path !== "Base" && path !== "./core.bend")
+    .map(([line]) => line);
+  return ["import Base", "import ./core.bend as C", ...others].join("\n");
+}
+
 // Where the project sits in the scratch tree: under its own last `depth`
 // ancestors' names, so "../".repeat(depth) climbs exactly to the root.
 export function placeProject(root: string, projectDir: string, depth: number): string {
@@ -122,6 +133,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const laws = readFileSync(join(projectDir, "LAWS.bend"), "utf8");
   const proof = readFileSync(join(projectDir, "PROOF.bend"), "utf8");
   const { dirs: imports, depth } = relativeImports([core, laws, proof]);
+  const counterHead = counterImports(laws);
 
   function bend(dir: string, file: string, checkOnly: boolean): { ok: boolean; location: string } {
     const r = Bun.spawnSync(["bend", file, ...(checkOnly ? ["--check-only"] : [])], { cwd: dir, timeout: LIMIT_MS });
@@ -158,7 +170,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
 
   function counterHolds(coreText: string, m: Mutant): { ok: boolean; out: string } {
     return inScratch(coreText, (dir) => {
-      writeFileSync(join(dir, "COUNTER.bend"), `import Base\nimport ./core.bend as C\n\ndef counter() -> ${m.counter}:\n  {==}\n`);
+      writeFileSync(join(dir, "COUNTER.bend"), `${counterHead}\n\ndef counter() -> ${m.counter}:\n  {==}\n`);
       const r = bend(dir, "COUNTER.bend", true);
       return { ok: r.ok, out: r.location };
     });

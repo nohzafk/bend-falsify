@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mutate, placeProject, relativeImports } from "../src/mutants.ts";
+import { counterImports, mutate, placeProject, relativeImports } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -17,6 +17,11 @@ test("the project sits under its real ancestors, deep enough for every import", 
   expect(placeProject("/tmp/r", "/home/u/projects/app/lib", 2)).toBe("/tmp/r/projects/app/lib");
   expect(placeProject("/tmp/r", "/home/u/projects/app/lib", 1)).toBe("/tmp/r/app/lib");
   expect(() => placeProject("/tmp/r", "/a", 3)).toThrow("past the filesystem root");
+});
+
+test("the counterexample file imports the core as C and the laws' other imports", () => {
+  const h = counterImports("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S\n\nlaw x:\n");
+  expect(h).toBe("import Base\nimport ./core.bend as C\nimport ../../s/core.bend as S");
 });
 
 test("a mutation replaces exactly one whole line, or refuses", () => {
