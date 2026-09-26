@@ -1,0 +1,9 @@
+// Mutants that are right: each law false at the counterexample, each proof broken.
+import { runMutants } from "../src/mutants.ts";
+
+runMutants(import.meta.dir + "/tree/group/proj", [
+  { law: "double_adds", section: "double adds", from: "  Nat.mul(n, 2n)", to: "  Nat.mul(n, 3n)",
+    why: "double triples", counter: "{C.double(1n) == 2n : Nat}", failsIn: "LAWS.double_adds" },
+  { law: "keep_same", section: "keep is the identity", from: "  Nat.add(n, 0n)", to: "  Nat.add(n, 1n)",
+    why: "keep adds one", counter: "{C.keep(0n) == 0n : Nat}", failsIn: "LAWS.keep_same" },
+]);

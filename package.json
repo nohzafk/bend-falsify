@@ -1,0 +1,23 @@
+{
+  "name": "bend-falsify",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^7.0.2"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "bend-falsify": "./src/falsify.ts"
+  },
+  "files": [
+    "src/index.ts",
+    "src/mutants.ts",
+    "src/falsify.ts",
+    "LICENSE",
+    "README.md"
+  ]
+}
