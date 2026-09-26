@@ -106,7 +106,7 @@ export function relativeImports(texts: string[]): { dirs: string[]; depth: numbe
 // package's error type, say). LAWS.bend's own import of the core is left out:
 // one file under two names is a checker error.
 export function counterImports(laws: string): string {
-  const others = [...laws.matchAll(/^import (\S+)(?: as (\S+))?\s*$/gm)]
+  const others = [...laws.matchAll(/^import (\S+)(?: as (\S+))?[ \t]*$/gm)]
     .filter(([, path]) => path !== "Base" && path !== "./core.bend")
     .map(([line]) => line);
   return ["import Base", "import ./core.bend as C", ...others].join("\n");
