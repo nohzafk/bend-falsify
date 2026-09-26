@@ -1,16 +1,30 @@
 import { expect, test } from "bun:test";
-import { counterImports, mutate, placeProject, relativeImports } from "../src/mutants.ts";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type Law, counterImports, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
   return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
 };
 
-test("relative imports of any depth, and how far the deepest climbs", () => {
-  const r = relativeImports(["import Base\nimport ./core.bend as C\nimport ../base-facts/a.bend as A\n", "import ../../bend-schema/core/core.bend as S\n"]);
-  expect(r.dirs.sort()).toEqual(["../../bend-schema", "../base-facts"]);
+test("outward imports: a directory, and a file, at any depth", () => {
+  const r = relativeImports(["import Base\nimport ./core.bend as C\nimport ../base-facts/a.bend as A\n", "import ../../bend-schema/core/core.bend as S\nimport ../shared.bend as H\n"]);
+  expect(r.paths.sort()).toEqual(["../../bend-schema", "../base-facts", "../shared.bend"]);
   expect(r.depth).toBe(2);
   expect(relativeImports(["import ./core.bend as C\n"]).depth).toBe(1);
+});
+
+test("an import is kept with the file that makes it", () => {
+  expect(importSites([["core.bend", "import ../shared.bend as S\n"], ["LAWS.bend", "import ../../lib/facts.bend as F\nimport ../shared.bend as S\n"]]))
+    .toEqual([{ file: "core.bend", rel: "../shared.bend" }, { file: "LAWS.bend", rel: "../../lib" }]);
+});
+
+test("an import that names nothing on disk is reported, with the file that makes it", () => {
+  const dir = import.meta.dir + "/tree/group/proj";
+  const sites = importSites([["core.bend", "import ../shared.bend as S\nimport ../gone.bend as G\n"]]);
+  expect(missingImports(dir, sites)).toEqual([{ file: "core.bend", rel: "../gone.bend", abs: `${import.meta.dir}/tree/group/gone.bend` }]);
 });
 
 test("the project sits under its real ancestors, deep enough for every import", () => {
@@ -32,9 +46,67 @@ test("a mutation replaces exactly one whole line, or refuses", () => {
   expect(() => mutate("b\nb", "b", "x", "L", 3)).toThrow("nth 3");
 });
 
-test("right mutants pass, through an import two levels up and one in a subdirectory", () => {
+const LAWS = `import Base
+import ./core.bend as C
+
+law double_adds:
+  for n: Nat
+  {C.double(n) == Nat.mul(n, 2n) : Nat}
+
+law covered:
+  for ~rule: Nat -> C.Raw -> Maybe<&2, C.Err>
+  for +s: C.Schema
+  for -tag: Nat
+  for h: {C.check(~rule, s, tag) == Some{C.Err{tag}} : Bool}
+  {C.defect(~rule, s, tag) == tag : Nat}
+
+law uses_premise:
+  for +s: C.Schema
+  for h: {C.check(~C.no_rule, s, 1n) == Some{C.Err{0n}} : Bool}
+  {C.defect(~C.no_rule, s, 1n) == h : Nat}
+`;
+
+test("a law is read as its binders -- marks, premises and all -- and its claim", () => {
+  const law = readLaw(LAWS, "covered");
+  expect(law.binders).toEqual([
+    { name: "rule", mark: "~", type: "Nat -> C.Raw -> Maybe<&2, C.Err>", premise: false },
+    { name: "s", mark: "+", type: "C.Schema", premise: false },
+    { name: "tag", mark: "-", type: "Nat", premise: false },
+    { name: "h", mark: "", type: "{C.check(~rule, s, tag) == Some{C.Err{tag}} : Bool}", premise: true },
+  ]);
+  expect(law.claim).toBe("{C.defect(~rule, s, tag) == tag : Nat}");
+  expect(readLaw(LAWS, "double_adds").claim).toBe("{C.double(n) == Nat.mul(n, 2n) : Nat}");
+  expect(() => readLaw(LAWS, "nope")).toThrow('no law "nope" in LAWS.bend');
+});
+
+test("a value stands in for a binder's name, and nothing else", () => {
+  const law: Law = readLaw(LAWS, "double_adds");
+  expect(lawInstance(law, { n: "3n" }).claim).toBe("{C.double(3n) == Nat.mul(3n, 2n) : Nat}");
+  // the mark is not part of the name: it stays where the claim puts it
+  expect(lawInstance(readLaw(LAWS, "covered"), { rule: "C.no_rule", s: "C.SNat{}", tag: "1n" }).claim)
+    .toBe("{C.defect(~C.no_rule, C.SNat{}, 1n) == 1n : Nat}");
+  // a name inside a string literal, or inside a longer word, is not a binder
+  expect(substitute('{C.RStr{"n"} == C.n2 : Bool}', { n: "9n" })).toBe('{C.RStr{"n"} == C.n2 : Bool}');
+});
+
+test("an instance says which binder it could not stand for", () => {
+  const law = readLaw(LAWS, "double_adds");
+  expect(() => lawInstance(law, {})).toThrow('at gives no value for the binder "n" of double_adds');
+  expect(() => lawInstance(law, { n: "1n", m: "0n" })).toThrow('at names "m", which the law double_adds does not bind');
+  const covered = readLaw(LAWS, "covered");
+  // a claim that reads a premise's proof term is a law `at` cannot state: there
+  // is no value to put there, and `counter` is the fallback
+  expect(() => lawInstance(readLaw(LAWS, "uses_premise"), { s: "C.SNat{}" }))
+    .toThrow('the claim of uses_premise mentions "h", and at gives no value for it');
+  // a premise is instantiated from the binders it reads, and needs no value of its own
+  expect(lawInstance(covered, { rule: "C.no_rule", s: "C.SNat{}", tag: "1n" }).premises)
+    .toEqual([{ binder: "h", equation: "{C.check(~C.no_rule, C.SNat{}, 1n) == Some{C.Err{1n}} : Bool}" }]);
+});
+
+test("right mutants pass, through a file import, a directory import and a premise", () => {
   const r = run("fixture_ok.ts");
-  expect(r.out).toContain("PASS: all 2 mutants");
+  expect(r.out).toContain("PASS: all 4 mutants");
+  expect(r.out).toContain("(counter not tied to the law)");
   expect(r.code).toBe(0);
 });
 
@@ -42,8 +114,11 @@ for (const [i, says] of [
   [0, "false on the core itself"],
   [1, "still holds on the mutant"],
   [2, "not LAWS.keep_same"],
-  [3, "no counterexample"],
+  [3, 'no counterexample: give "at"'],
   [4, "occurs 2 times"],
+  [5, 'at gives no value for the binder "n"'],
+  [6, 'at names "m"'],
+  [7, 'the law\'s premise "h" is false on the mutant'],
 ] as const) {
   test(`a wrong mutant is refused: ${says}`, () => {
     const r = run("fixture_bad.ts", String(i));
@@ -51,6 +126,20 @@ for (const [i, says] of [
     expect(r.code).toBe(1);
   });
 }
+
+test("an import that names nothing stops the run by name, before any check", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "falsify-gone-"));
+  try {
+    cpSync(`${import.meta.dir}/tree`, join(tmp, "tree"), { recursive: true });
+    rmSync(join(tmp, "tree/group/shared.bend"));
+    const r = run("../src/falsify.ts", "mutants", join(tmp, "tree/group/proj"));
+    expect(r.out).toContain("core.bend: import ../shared.bend does not exist:");
+    expect(r.out).not.toContain("counterexample");
+    expect(r.code).toBe(1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
 
 test("falsify: a law that holds on every instance", () => {
   const r = run("../src/falsify.ts", `${import.meta.dir}/spec_ok.ts`);
@@ -69,7 +158,7 @@ test("falsify: a counterexample is named, alone and with --each", () => {
 
 test("cli: mutants [dir] runs <dir>/mutants.json", () => {
   const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/group/proj`);
-  expect(r.out).toContain("PASS: all 2 mutants");
+  expect(r.out).toContain("PASS: all 4 mutants");
   expect(r.code).toBe(0);
 });
 

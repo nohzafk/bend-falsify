@@ -6,7 +6,7 @@
     "to": "  Nat.add(n, 1n)",
     "nth": 1,
     "why": "plus0 adds one",
-    "counter": "{C.plus0(0n) == 0n : Nat}",
+    "at": { "n": "0n" },
     "failsIn": "LAWS.plus0_same"
   },
   {
@@ -16,7 +16,7 @@
     "to": "  Nat.add(n, 2n)",
     "nth": 2,
     "why": "the other spelling adds two",
-    "counter": "{C.plus0_slow(0n) == 0n : Nat}",
+    "at": { "n": "0n" },
     "failsIn": "LAWS.plus0_slow_same"
   },
   {
@@ -25,7 +25,7 @@
     "from": "  plus0(plus0(n))",
     "to": "  plus0(Nat.add(n, 1n))",
     "why": "the first of the two steps adds one",
-    "counter": "{C.plus0_twice(0n) == 0n : Nat}",
+    "at": { "n": "0n" },
     "failsIn": "LAWS.plus0_twice_same",
     "with": [
       "plus0 adds nothing"

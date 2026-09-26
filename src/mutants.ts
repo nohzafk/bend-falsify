@@ -5,13 +5,21 @@
 // tree, keep only the tools and one law's section of PROOF.bend, and check:
 //
 //   1. the counterexample holds on the core as it is      (the claim is true)
-//   2. the counterexample fails on the mutated core       (the law is false)
-//   3. the proof checks on the core as it is              (the control)
-//   4. the proof fails on the mutated core, in `failsIn`  (it depends on it)
+//   2. the law's premises, instantiated, hold on the mutant (the instance is
+//      one the law is about)
+//   3. the counterexample fails on the mutated core       (the law is false)
+//   4. the proof checks on the core as it is              (the control)
+//   5. the proof fails on the mutated core, in `failsIn`  (it depends on it)
 //
-// Steps 1 and 2 make `why` a checked claim: a proof that fails on a mutant
+// Checks 1 to 3 make `why` a checked claim: a proof that fails on a mutant
 // where the law still holds would otherwise count as a kill. A proof that
 // still checks against a false law would be saying nothing about the core.
+//
+// The counterexample is an instance of the law, not a claim of its own: the
+// mutant names the law's binders at literals (`at`), and the tool reads the
+// law's statement from LAWS.bend and puts the values in. A counter written by
+// hand (`counter`) is still accepted for a law shape `at` cannot express, and
+// its report line says that nothing ties it to the law.
 //
 // Isolating one section per law matters: the checker stops at the first
 // failing def, and proofs over the same definitions break together, so a mutant
@@ -21,8 +29,8 @@
 // its relative imports climb: a project that imports ../../bend-schema/x is
 // placed two directories below the scratch root, under its real ancestors'
 // names, so every import resolves inside the scratch tree. Nothing outside
-// the project and the directories it imports is copied, and nothing lands
-// outside the scratch root.
+// the project and the imports it names is copied, and nothing lands outside
+// the scratch root.
 //
 // A project calls runMutants(projectDir, MUTANTS) from its own table file.
 // It expects core.bend, LAWS.bend and PROOF.bend in projectDir, and a PROOF.bend
@@ -41,10 +49,17 @@ export interface Mutant {
   from: string; // a line of core.bend, replaced whole
   to: string;
   why: string; // why the law is false afterwards, in words
-  // An instance of the law at literals, as a Bend equation over the core
-  // imported `as C`, and whatever else LAWS.bend imports, by its alias -- e.g. "{C.charge(C.plan1, 3n) == 30n : Nat}". It must
-  // hold on the core and fail on the mutant: that is what makes `why` true.
-  counter: string;
+  // The law's binders, each with the Bend expression that stands for it -- e.g.
+  // { n: "3n" }. The tool reads the law's statement from LAWS.bend and builds
+  // the instance from it, so a counterexample cannot be a claim that is not the
+  // law. A value replaces the binder's *name*: the mark stays where the claim
+  // puts it, so `for ~rule: ...` with { rule: "C.no_rule" } is `~C.no_rule`.
+  at?: Record<string, string>;
+  // A claim of its own, for a law shape `at` cannot express -- one whose claim
+  // uses a premise's proof term, or whose premise is what the mutant makes
+  // false. It is checked the same way, but nothing ties it to the law, and the
+  // report says so. `at` is what you want everywhere else.
+  counter?: string;
   failsIn: string; // the def the checker must name
   // When `from` occurs more than once in core.bend, which occurrence (1 =
   // first). Without it a repeated line is refused: the mutant would be
@@ -90,15 +105,214 @@ export function mutate(text: string, from: string, to: string, law: string, nth?
   return lines.join("\n");
 }
 
-// The directories a project imports by a relative path that leaves it
-// ("../base-facts", "../../bend-schema"), and how many levels the deepest
-// one climbs. The project directory itself is copied whole, so an import
-// inside it ("./x", "./dir/x") resolves too.
-export function relativeImports(texts: string[]): { dirs: string[]; depth: number } {
-  const dirs = [...new Set(texts.flatMap((text) =>
-    [...text.matchAll(/^import ((?:\.\.\/)+)([^/\s]+)\//gm)].map((m) => `${m[1]}${m[2]}`)))];
-  const depth = Math.max(1, ...dirs.map((d) => d.split("/").filter((s) => s === "..").length));
-  return { dirs, depth };
+// ---- what a project imports from outside itself -------------------------
+
+export interface ImportSite {
+  file: string; // the file that makes the import: core.bend, LAWS.bend, PROOF.bend
+  rel: string; // what is mirrored, relative to the project directory
+}
+
+// The outward imports of the given [file, text] pairs. An import that climbs
+// out, `../<name>` at any depth, is mirrored: `<name>` as it stands, which is
+// a directory when the import goes on into it (`../lib/facts.bend` copies
+// `../lib`) and the file itself when it does not (`../shared.bend`).
+// The project directory is copied whole, so an import inside it needs nothing
+// here. `import Base` names no path.
+export function importSites(sources: [string, string][]): ImportSite[] {
+  const sites: ImportSite[] = [];
+  for (const [file, text] of sources) {
+    for (const m of text.matchAll(/^import ((?:\.\.\/)+)([^/\s]+)(?=[/\s]|$)/gm)) {
+      const rel = `${m[1]}${m[2]}`;
+      if (!sites.some((s) => s.rel === rel)) sites.push({ file, rel });
+    }
+  }
+  return sites;
+}
+
+// How many levels deep the project has to sit in the scratch tree: the deepest
+// `..` in any one outward import, and at least 1.
+function depthOf(paths: string[]): number {
+  return Math.max(1, ...paths.map((p) => p.split("/").filter((s) => s === "..").length));
+}
+
+export function relativeImports(texts: string[]): { paths: string[]; depth: number } {
+  const paths = importSites(texts.map((text) => ["", text])).map((s) => s.rel);
+  return { paths, depth: depthOf(paths) };
+}
+
+// The imports that name nothing on disk. A run stops on them by name, before
+// any check: inside the scratch tree they would surface as a counterexample
+// that is false on the core, which is not what happened.
+export function missingImports(projectDir: string, sites: ImportSite[]): { file: string; rel: string; abs: string }[] {
+  return sites
+    .map((s) => ({ file: s.file, rel: s.rel, abs: resolve(projectDir, s.rel) }))
+    .filter((s) => !existsSync(s.abs));
+}
+
+// ---- the law, and the instance of it a mutant names ---------------------
+
+export interface Binder {
+  name: string;
+  mark: string; // ~, + or - as written, "" when unmarked
+  type: string;
+  premise: boolean; // its type is a `{...}` equation: the law holds under it
+}
+
+export interface Law {
+  name: string;
+  binders: Binder[];
+  claim: string; // the `{...}` the law states
+}
+
+export interface Instance {
+  claim: string;
+  premises: { binder: string; equation: string }[];
+}
+
+// The name of the binder a `for` clause opens, or null.
+const BINDER = /^for\s*([~+-]?)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:/;
+
+// The `{...}` that starts at `i`, and the index just past it. A brace inside a
+// string literal does not count.
+function braces(text: string, i: number, law: string): { text: string; end: number } {
+  let depth = 0;
+  let j = i;
+  while (j < text.length) {
+    const c = text[j];
+    if (c === '"') { j = stringEnd(text, j); continue; }
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) return { text: text.slice(i, j + 1), end: j + 1 };
+    }
+    j += 1;
+  }
+  throw new Error(`law ${law}: unbalanced "{": ${JSON.stringify(text.slice(i, i + 40))}`);
+}
+
+// The index just past the string literal that opens at `i`.
+function stringEnd(text: string, i: number): number {
+  let j = i + 1;
+  while (j < text.length && text[j] !== '"') {
+    if (text[j] === "\\") j += 1;
+    j += 1;
+  }
+  return Math.min(j + 1, text.length);
+}
+
+// Walk the text and let `f` stand in for each identifier that stands alone in
+// it. A name inside a longer word is not a name (n is not Nat, nor 2n), and a
+// name inside a string literal is not a name ("a" is not the binder a).
+function rewrite(text: string, f: (id: string) => string | null): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '"') {
+      const j = stringEnd(text, i);
+      out += text.slice(i, j);
+      i = j;
+      continue;
+    }
+    const m = /^[A-Za-z0-9_]+/.exec(text.slice(i));
+    if (m) {
+      out += f(m[0]) ?? m[0];
+      i += m[0].length;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
+}
+
+// Every binder name the text reads, outside string literals.
+function mentions(text: string, name: string): boolean {
+  let found = false;
+  rewrite(text, (id) => {
+    if (id === name) found = true;
+    return null;
+  });
+  return found;
+}
+
+// `text` with each binder name replaced by its value. Every value goes in at
+// once, so a value that reads a binder's name is not substituted again.
+export function substitute(text: string, values: Record<string, string>): string {
+  return rewrite(text, (id) => values[id] ?? null);
+}
+
+// The law as LAWS.bend states it: its binders -- a premise is a binder whose
+// type is a `{...}` equation -- and its claim. Refuses a law it cannot read
+// exactly rather than guessing at one.
+export function readLaw(lawsText: string, name: string): Law {
+  const head = `law ${name}:`;
+  const block = lawsText.split(/^(?=law |# ---- |def )/m).find((b) => b.startsWith(head));
+  if (block === undefined) throw new Error(`no law "${name}" in LAWS.bend`);
+  const rest = block.slice(head.length);
+  const binders: Binder[] = [];
+  let claim = "";
+  let i = 0;
+  const space = (): void => {
+    while (i < rest.length && /[\s,]/.test(rest[i])) i += 1;
+  };
+  while (i < rest.length) {
+    space();
+    if (i >= rest.length) break;
+    if (rest[i] === "{") {
+      const g = braces(rest, i, name);
+      claim = g.text;
+      break;
+    }
+    const m = BINDER.exec(rest.slice(i));
+    if (!m) {
+      throw new Error(`law ${name}: at needs a claim of the form {... : T}, and this law's statement goes on with ${JSON.stringify(rest.slice(i, i + 30))}; give "counter" instead`);
+    }
+    const [, mark, bname] = m;
+    i += m[0].length;
+    space();
+    if (rest[i] === "{") {
+      const g = braces(rest, i, name);
+      binders.push({ name: bname, mark, type: g.text, premise: true });
+      i = g.end;
+      continue;
+    }
+    // A type that is not an equation runs to the next binder or to the claim,
+    // whichever the layout puts next: both follow a line break or a comma.
+    const start = i;
+    while (i < rest.length && !/^[\s,]*(?:for\b|\{)/.test(rest.slice(i))) i += 1;
+    const type = rest.slice(start, i).replace(/\s+/g, " ").trim();
+    if (type === "") throw new Error(`law ${name}: the binder ${bname} has no type`);
+    binders.push({ name: bname, mark, type, premise: false });
+  }
+  if (claim === "") throw new Error(`law ${name}: no claim in LAWS.bend`);
+  return { name, binders, claim: claim.replace(/\s+/g, " ").trim() };
+}
+
+// The law at the values `at` names: its claim with every binder replaced, and
+// every premise it instantiates. Refuses a partial `at` -- it must give a
+// value for each binder that is not a premise, and none for a name the law
+// does not bind -- because a half-substituted statement is not an instance.
+export function lawInstance(law: Law, at: Record<string, string>): Instance {
+  const names = law.binders.map((b) => b.name);
+  for (const k of Object.keys(at)) {
+    if (!names.includes(k)) throw new Error(`at names "${k}", which the law ${law.name} does not bind`);
+  }
+  const free = (what: string, text: string): void => {
+    const missing = names.find((n) => at[n] === undefined && mentions(text, n));
+    if (missing !== undefined) throw new Error(`${what} mentions "${missing}", and at gives no value for it`);
+  };
+  for (const b of law.binders) {
+    if (!b.premise && at[b.name] === undefined) throw new Error(`at gives no value for the binder "${b.name}" of ${law.name}`);
+  }
+  free(`the claim of ${law.name}`, law.claim);
+  const premises = law.binders
+    .filter((b) => b.premise)
+    .map((b) => {
+      free(`the premise "${b.name}" of ${law.name}`, b.type);
+      return { binder: b.name, equation: substitute(b.type, at) };
+    });
+  return { claim: substitute(law.claim, at), premises };
 }
 
 // The counterexample file's imports: the core as C, and every other import
@@ -132,8 +346,17 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const core = readFileSync(join(projectDir, "core.bend"), "utf8");
   const laws = readFileSync(join(projectDir, "LAWS.bend"), "utf8");
   const proof = readFileSync(join(projectDir, "PROOF.bend"), "utf8");
-  const { dirs: imports, depth } = relativeImports([core, laws, proof]);
+  const sites = importSites([["core.bend", core], ["LAWS.bend", laws], ["PROOF.bend", proof]]);
+  const { paths, depth } = relativeImports([core, laws, proof]);
   const counterHead = counterImports(laws);
+
+  // Everything the scratch tree needs has to be there before the first check:
+  // a missing import would otherwise read as a false counterexample.
+  const gone = missingImports(projectDir, sites);
+  if (gone.length > 0) {
+    for (const g of gone) console.log(`FAIL: ${g.file}: import ${g.rel} does not exist: ${g.abs}`);
+    process.exit(1);
+  }
 
   function bend(dir: string, file: string, checkOnly: boolean): { ok: boolean; location: string } {
     const r = Bun.spawnSync(["bend", file, ...(checkOnly ? ["--check-only"] : [])], { cwd: dir, timeout: LIMIT_MS });
@@ -150,11 +373,10 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       const dir = placeProject(root, projectDir, depth);
       mkdirSync(dirname(dir), { recursive: true });
       cpSync(resolve(projectDir), dir, { recursive: true, filter: SKIP });
-      for (const rel of imports) {
+      for (const rel of paths) {
         const from = resolve(projectDir, rel);
         const to = resolve(dir, rel);
         if (!inside(root, to)) throw new Error(`import ${rel}: would land outside the scratch tree`);
-        if (!existsSync(from)) throw new Error(`import ${rel}: ${from} does not exist`);
         mkdirSync(dirname(to), { recursive: true });
         if (existsSync(to)) continue; // already copied: it sits inside the project
         cpSync(from, to, { recursive: true, filter: SKIP });
@@ -168,11 +390,12 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     }
   }
 
-  function counterHolds(coreText: string, m: Mutant): { ok: boolean; out: string } {
+  // Does this equation close against this core? The checker runs the code, so
+  // it holds exactly when both sides reduce to the same term.
+  function checkClaim(coreText: string, claim: string): { ok: boolean; location: string } {
     return inScratch(coreText, (dir) => {
-      writeFileSync(join(dir, "COUNTER.bend"), `${counterHead}\n\ndef counter() -> ${m.counter}:\n  {==}\n`);
-      const r = bend(dir, "COUNTER.bend", true);
-      return { ok: r.ok, out: r.location };
+      writeFileSync(join(dir, "INSTANCE.bend"), `${counterHead}\n\ndef counter() -> ${claim}:\n  {==}\n`);
+      return bend(dir, "INSTANCE.bend", true);
     });
   }
 
@@ -197,42 +420,69 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   };
   for (const m of mutants) {
     const name = m.law.padEnd(26);
-    if (!m.counter) {
-      console.log(`  ${name} FAIL  no counterexample: say at which literals the law is false after the mutation`);
+    // A counter written by hand is not read from the law: every line about it
+    // says so, or the gap goes unnoticed.
+    const loose = m.counter !== undefined && m.at === undefined ? "  (counter not tied to the law)" : "";
+    const fail = (msg: string): void => {
+      console.log(`  ${name} FAIL  ${msg}${loose}`);
       bad += 1;
+    };
+
+    let claim: string;
+    let premises: Instance["premises"] = [];
+    if (m.at !== undefined) {
+      try {
+        const inst = lawInstance(readLaw(laws, m.law), m.at);
+        claim = inst.claim;
+        premises = inst.premises;
+      } catch (e) {
+        fail((e as Error).message);
+        continue;
+      }
+    } else if (m.counter) {
+      claim = m.counter;
+    } else {
+      fail(`no counterexample: give "at" with a value for each of the law's binders, or "counter" with a claim of your own`);
       continue;
     }
+
     let mutated: string;
     try {
       mutated = mutate(core, m.from, m.to, m.law, m.nth);
     } catch (e) {
-      console.log(`  ${name} FAIL  ${(e as Error).message}`);
-      bad += 1;
+      fail((e as Error).message);
       continue;
     }
     const withLaws = (m.with ?? []).map(lawOf);
-    const cControl = counterHolds(core, m);
-    const cMutant = cControl.ok ? counterHolds(mutated, m) : { ok: true, out: "" };
-    const control = proofChecks(core, m, withLaws);
-    const mutant = control.ok ? proofChecks(mutated, m, withLaws) : { ok: true, location: "" };
-    if (!cControl.ok) {
-      console.log(`  ${name} FAIL  the counterexample is false on the core itself: ${m.counter}`);
-      bad += 1;
-    } else if (cMutant.ok) {
-      console.log(`  ${name} FAIL  the counterexample still holds on the mutant, so the law is not shown false: ${m.counter}`);
-      bad += 1;
-    } else if (!control.ok) {
-      console.log(`  ${name} FAIL  the proof does not check even unmutated (${control.location})`);
-      bad += 1;
-    } else if (mutant.ok) {
-      console.log(`  ${name} FAIL  still checks when ${m.why}`);
-      bad += 1;
-    } else if (mutant.location !== m.failsIn) {
-      console.log(`  ${name} FAIL  failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
-      bad += 1;
-    } else {
-      console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}`);
+
+    if (!checkClaim(core, claim).ok) {
+      fail(`the counterexample is false on the core itself: ${claim}`);
+      continue;
     }
+    const falsePremise = premises.find((p) => !checkClaim(mutated, p.equation).ok);
+    if (falsePremise) {
+      fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
+      continue;
+    }
+    if (checkClaim(mutated, claim).ok) {
+      fail(`the counterexample still holds on the mutant, so the law is not shown false: ${claim}`);
+      continue;
+    }
+    const control = proofChecks(core, m, withLaws);
+    if (!control.ok) {
+      fail(`the proof does not check even unmutated (${control.location})`);
+      continue;
+    }
+    const mutant = proofChecks(mutated, m, withLaws);
+    if (mutant.ok) {
+      fail(`still checks when ${m.why}`);
+      continue;
+    }
+    if (mutant.location !== m.failsIn) {
+      fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
+      continue;
+    }
+    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}`);
   }
   if (bad > 0) {
     console.log(`FAIL: ${bad} of ${mutants.length} mutants did not break the proof they target`);
