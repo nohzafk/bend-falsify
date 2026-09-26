@@ -4,12 +4,14 @@
 #   1. the fixture project checks: a file import and a directory import two
 #      levels up, four laws, one of them with a premise
 #   2. the tests pass: right mutants pass; each way a mutant can be wrong is
-#      refused; the falsifier names a counterexample and passes a true law
+#      refused; a mutant that relaxes a law's premise is a counterexample all
+#      the same; the falsifier names a counterexample and passes a true law
 #   3. the example (examples/plus0, the README's example) checks, and a broken
 #      copy of its spec is refused
 #   4. the mutant table's newer refusals: an instance the mutation does not
-#      move, at without a binder's value, and an import that names nothing --
-#      which is what a file import would look like unwired
+#      move, at without a binder's value, an import that names nothing --
+#      which is what a file import would look like unwired -- and two sections
+#      under one header
 #   5. the source typechecks
 #
 # Usage: sh test.sh
@@ -36,13 +38,13 @@ fi
 tail -3 /tmp/bend-falsify-tests.log
 
 echo "== 3. the example =="
-# examples/plus0 is the project the README's snippets come from: three laws,
-# three mutants, one of them proved `with` another, and a spec. Its spec and
-# its table both run here, so the README cannot describe a file that does not
-# work.
+# examples/plus0 is the project the README's snippets come from: four laws --
+# one of them Bool-valued -- four mutants, one of them proved `with` another,
+# and a spec. Its spec and its table both run here, so the README cannot
+# describe a file that does not work.
 (cd examples/plus0 && bend PROOF.bend | grep -q "All terms check.") || { echo "FAIL: the example does not check"; exit 1; }
 bun src/falsify.ts examples/plus0/spec.json | grep -q "holds on all 3 instances" || { echo "FAIL: the example's spec"; exit 1; }
-bun src/falsify.ts mutants examples/plus0 | grep -q "PASS: all 3 mutants" || { echo "FAIL: the example's mutant table"; exit 1; }
+bun src/falsify.ts mutants examples/plus0 | grep -q "PASS: all 4 mutants" || { echo "FAIL: the example's mutant table"; exit 1; }
 
 # A check that has never failed proves nothing. Break one claim in a copy and
 # require it to be refused. The spec's imports are relative to the spec file,
@@ -66,9 +68,14 @@ echo "== 4. the mutant table's refusals =="
 # The fixture's table, as it stands, runs: its laws import a directory two
 # levels up and a file one level up (`import ../shared.bend`), and the run has
 # to mirror both into the scratch tree, or the counters read as false on the
-# core itself.
-bun src/falsify.ts mutants test/tree/group/proj | grep -q "PASS: all 4 mutants" || { echo "FAIL: the fixture's mutant table"; exit 1; }
+# core itself. Its last row is a mutant that relaxes the law's premise instead
+# of falsifying its claim: the premise is false on the core there, so check 1
+# is vacuous, and the run says so on the line.
+bun src/falsify.ts mutants test/tree/group/proj > /tmp/bend-falsify-fixture.log 2>&1 || { cat /tmp/bend-falsify-fixture.log; echo "FAIL: the fixture's mutant table"; exit 1; }
+grep -q "PASS: all 5 mutants" /tmp/bend-falsify-fixture.log || { echo "FAIL: the fixture's mutant table"; exit 1; }
+grep -q "(premise false on the core)" /tmp/bend-falsify-fixture.log || { echo "FAIL: a premise-relaxing mutant was not reported as vacuous"; exit 1; }
 echo "  a file import and a directory import are mirrored into the scratch tree"
+echo "  a premise false on the core is reported, not refused"
 
 # `double` is `Nat.mul(n, 2n)` mutated to `Nat.mul(n, 3n)`, and the two agree at
 # n = 0: that instance is not a counterexample, and `at` must be refused.
@@ -91,6 +98,15 @@ cp -R test/tree "$TMP/tree-gone"
 rm "$TMP/tree-gone/group/shared.bend"
 bun src/falsify.ts mutants "$TMP/tree-gone/group/proj" 2>&1 | grep -q "core.bend: import ../shared.bend does not exist:" || { echo "FAIL: an import that names nothing was not reported"; exit 1; }
 echo "  an import that names nothing is reported by name"
+
+# Two sections under one header would be kept together and their text
+# concatenated, so the proof would break somewhere that names neither: the run
+# stops by name and line, before any check.
+cp -R test/tree "$TMP/tree-dup"
+sed 's/^# ---- keep is the identity ----$/# ---- double adds ----/' "$TMP/tree-dup/group/proj/PROOF.bend" > "$TMP/p"
+mv "$TMP/p" "$TMP/tree-dup/group/proj/PROOF.bend"
+bun src/falsify.ts mutants "$TMP/tree-dup/group/proj" 2>&1 | grep -q 'duplicate section header "# ---- double adds ----"' || { echo "FAIL: two sections under one header were not refused"; exit 1; }
+echo "  two sections under one header are refused by name and line"
 
 echo "== 5. the types =="
 bunx tsc -p .

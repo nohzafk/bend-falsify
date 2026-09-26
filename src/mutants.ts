@@ -5,6 +5,9 @@
 // tree, keep only the tools and one law's section of PROOF.bend, and check:
 //
 //   1. the counterexample holds on the core as it is      (the claim is true)
+//      -- where the law applies: if every premise the instance carries holds
+//      on the core, the claim must hold too. A premise that is false on the
+//      core makes the check vacuous, and the mutant's line says so
 //   2. the law's premises, instantiated, hold on the mutant (the instance is
 //      one the law is about)
 //   3. the counterexample fails on the mutated core       (the law is false)
@@ -14,6 +17,13 @@
 // Checks 1 to 3 make `why` a checked claim: a proof that fails on a mutant
 // where the law still holds would otherwise count as a kill. A proof that
 // still checks against a false law would be saying nothing about the core.
+//
+// Check 1 is conditional for an `at` instance because a mutant can move a
+// law's premise rather than its claim: a mutant that strengthens `wf` admits a
+// value the law never covered, the claim is false there, and the core's
+// premise was false there too -- so there is no instance of the law to check
+// the claim against, and the row is still a counterexample. A `counter`
+// carries no premise, so its check 1 is unconditional.
 //
 // The counterexample is an instance of the law, not a claim of its own: the
 // mutant names the law's binders at literals (`at`), and the tool reads the
@@ -80,6 +90,18 @@ export function sections(text: string): { head: string; secs: [string, string][]
   const secs: [string, string][] = [];
   for (let i = 1; i < parts.length; i += 2) secs.push([parts[i], parts[i + 1]]);
   return { head: parts[0], secs };
+}
+
+// The section headers a file repeats, with every line each one sits on. Two
+// sections under one name are kept together -- their text is concatenated --
+// so the proof breaks somewhere that names neither; the run refuses them by
+// name and line instead.
+export function duplicateSections(text: string): { header: string; lines: number[] }[] {
+  const seen = new Map<string, number[]>();
+  text.split("\n").forEach((line, i) => {
+    if (/^# ---- .* ----$/.test(line)) seen.set(line, [...(seen.get(line) ?? []), i + 1]);
+  });
+  return [...seen].map(([header, lines]) => ({ header, lines })).filter((d) => d.lines.length > 1);
 }
 
 // LAWS.bend with every law but the kept ones removed; its defs stay.
@@ -350,6 +372,17 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const { paths, depth } = relativeImports([core, laws, proof]);
   const counterHead = counterImports(laws);
 
+  // Two sections with one name would be kept together, and their text
+  // concatenated, so the proof would break somewhere that names neither:
+  // refused by name and line, before any check.
+  const doubles = duplicateSections(proof);
+  if (doubles.length > 0) {
+    for (const d of doubles) {
+      console.log(`FAIL: PROOF.bend: duplicate section header ${JSON.stringify(d.header)} (lines ${d.lines.join(", ")}); give each section its own name`);
+    }
+    process.exit(1);
+  }
+
   // Everything the scratch tree needs has to be there before the first check:
   // a missing import would otherwise read as a false counterexample.
   const gone = missingImports(projectDir, sites);
@@ -455,7 +488,12 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     }
     const withLaws = (m.with ?? []).map(lawOf);
 
-    if (!checkClaim(core, claim).ok) {
+    // Check 1, conditional for an instance: the law says nothing where its own
+    // premise is false, so a mutant that makes the premise false on the core
+    // leaves nothing for the claim to hold against. Checks 2 to 5 still run,
+    // so the row stays a checked claim. A `counter` carries no premise.
+    const falseOnCore = premises.find((p) => !checkClaim(core, p.equation).ok);
+    if (falseOnCore === undefined && !checkClaim(core, claim).ok) {
       fail(`the counterexample is false on the core itself: ${claim}`);
       continue;
     }
@@ -482,7 +520,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
       continue;
     }
-    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}`);
+    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}`);
   }
   if (bad > 0) {
     console.log(`FAIL: ${bad} of ${mutants.length} mutants did not break the proof they target`);

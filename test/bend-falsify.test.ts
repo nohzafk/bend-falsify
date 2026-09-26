@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, counterImports, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
+import { type Law, counterImports, duplicateSections, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -105,9 +105,22 @@ test("an instance says which binder it could not stand for", () => {
 
 test("right mutants pass, through a file import, a directory import and a premise", () => {
   const r = run("fixture_ok.ts");
-  expect(r.out).toContain("PASS: all 4 mutants");
+  expect(r.out).toContain("PASS: all 5 mutants");
   expect(r.out).toContain("(counter not tied to the law)");
+  // the row whose mutant relaxes the law's premise: check 1 is vacuous there,
+  // and the line says so
+  expect(r.out).toContain("(premise false on the core)");
   expect(r.code).toBe(0);
+});
+
+test("two sections under one header are refused by name and line", () => {
+  expect(duplicateSections("# a\n# ---- x ----\nb\n# ---- y ----\nc\n# ---- x ----\n")).toEqual([
+    { header: "# ---- x ----", lines: [2, 6] },
+  ]);
+  // a line with more between the dashes is a name like any other, and one
+  // header alone is no duplicate
+  expect(duplicateSections("# ---- tools: what first does ----\n\n# ---- a ----\n")).toEqual([]);
+  expect(duplicateSections("def f() -> Nat:\n  0n\n")).toEqual([]);
 });
 
 for (const [i, says] of [
@@ -141,6 +154,21 @@ test("an import that names nothing stops the run by name, before any check", () 
   }
 });
 
+test("two sections under one header stop the run, by name and line", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "falsify-dup-"));
+  try {
+    cpSync(`${import.meta.dir}/tree`, join(tmp, "tree"), { recursive: true });
+    const proof = join(tmp, "tree/group/proj/PROOF.bend");
+    writeFileSync(proof, readFileSync(proof, "utf8").replace("# ---- keep is the identity ----", "# ---- double adds ----"));
+    const r = run("../src/falsify.ts", "mutants", join(tmp, "tree/group/proj"));
+    expect(r.out).toContain('duplicate section header "# ---- double adds ----"');
+    expect(r.out).not.toContain("PASS:");
+    expect(r.code).toBe(1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("falsify: a law that holds on every instance", () => {
   const r = run("../src/falsify.ts", `${import.meta.dir}/spec_ok.ts`);
   expect(r.out).toContain("holds on all 4 instances");
@@ -158,7 +186,7 @@ test("falsify: a counterexample is named, alone and with --each", () => {
 
 test("cli: mutants [dir] runs <dir>/mutants.json", () => {
   const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/group/proj`);
-  expect(r.out).toContain("PASS: all 4 mutants");
+  expect(r.out).toContain("PASS: all 5 mutants");
   expect(r.code).toBe(0);
 });
 

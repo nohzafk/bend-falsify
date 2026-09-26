@@ -15,3 +15,10 @@ law plus0_slow_same:
 law plus0_twice_same:
   for +n: Nat
   {C.plus0_twice(n) == n : Nat}
+
+# A Bool-valued law, to show one in a table: the two spellings of adding
+# nothing agree wherever they are applied. Its claim is a `Nat.is_eq(...)`
+# equation whose type is `Bool`, not an equation between two `Nat`s.
+law plus0_agree:
+  for +n: Nat
+  {Nat.is_eq(C.plus0(n), C.plus0_slow(n)) == True{} : Bool}

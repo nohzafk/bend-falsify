@@ -13,8 +13,9 @@ the mutants, and the Bend checker decides.
   literals (`at`) or a counterexample of its own (`counter`).
 
 `examples/plus0/` is a whole project that uses both. Every snippet below is an
-excerpt of it, and `sh test.sh` runs its spec, its table, and a broken copy of
-each, so nothing here can drift from the code.
+excerpt of it, or of the test fixture `test/tree/group/proj` where the text says
+so, and `sh test.sh` runs the spec, the table, and a broken copy of each, so
+nothing here can drift from the code.
 
 ## Contents
 
@@ -152,11 +153,12 @@ import ./core.bend as C
 # The head of this file -- the imports above, and any def above the first
 # "# ---- ... ----" header -- is kept in every mutant run.
 
-# ---- tools: the one fact about Nat.add the proofs here rewrite with ----
+# ---- tools: the facts about Nat.add and Nat.cmp the proofs here rewrite with ----
 #
 # Base states no fact about Nat.add, so it is proved here, by induction on
-# the first argument. A header whose name contains "tools" is kept in every
-# mutant run, whatever law is being checked.
+# the first argument; Base states none about Nat.cmp either, and a law whose
+# claim is a Bool needs one. A header whose name contains "tools" is kept in
+# every mutant run, whatever law is being checked.
 
 def add_zero(a: Nat) -> {Nat.add(a, 0n) == a : Nat}:
   match a:
@@ -164,6 +166,14 @@ def add_zero(a: Nat) -> {Nat.add(a, 0n) == a : Nat}:
       {==}
     case 1n+p:
       %add_zero(p) : {1n+Nat.add(p, 0n) == 1n+_ : Nat}
+      {==}
+
+def cmp_refl_r(a: Nat) -> {EQ{} == Nat.cmp(a, a) : Cmp}:
+  match a:
+    case 0n:
+      {==}
+    case 1n+p:
+      %cmp_refl_r(p) : {EQ{} == _ : Cmp}
       {==}
 ```
 
@@ -186,9 +196,15 @@ A section header is a line that matches `^# ---- .* ----$`: `# ---- `, a name,
   mutant names it.
 - The **head** of the file — the imports, and any def above the first header —
   is kept in every run too. A def used by every proof can go there.
-- **Two headers with the same name are not refused.** Both sections are kept
-  and their text is concatenated, so the proof usually breaks in a way that
-  names neither. Give each section its own name.
+- **Two headers with the same name stop the run**, before any check, with the
+  header and both line numbers:
+
+  ```
+  FAIL: PROOF.bend: duplicate section header "# ---- double adds ----" (lines 23, 28); give each section its own name
+  ```
+
+  Left alone, both sections are kept under one name and their text is
+  concatenated, so the proof breaks in a way that names neither.
 
 ### One law per section
 
@@ -236,8 +252,30 @@ The checker prints a failing def as
 Location: LAWS.plus0_twice_same
 ```
 
-`failsIn` is that string, exactly. The checker names a def after the file that
-declares it, so:
+`failsIn` is that string, exactly. The checker names a def after the **file** it
+declares it in, so the alias the proof is written with is not the name it
+reports. Side by side, the same proof:
+
+```bend
+# PROOF.bend -- the def, written with the alias LAWS.bend is imported as
+# ---- plus0 adds nothing ----
+
+def Laws.plus0_same(n):
+  %add_zero(n) : {Nat.add(n, 0n) == _ : Nat}
+  {==}
+```
+
+```
+# what the checker prints when that proof breaks
+Location: LAWS.plus0_same
+```
+
+```jsonc
+// the mutant's field: the file's stem, not the alias
+"failsIn": "LAWS.plus0_same"
+```
+
+So:
 
 - a law `plus0_twice_same` in `LAWS.bend` is `LAWS.plus0_twice_same` — the
   usual case, because every law's proof def is `def Laws.<law>`;
@@ -354,7 +392,7 @@ what make the counterexample an instance of the law.
 
 | # | check | it fails with |
 | --- | --- | --- |
-| 1 | the counterexample holds on the core as it is | `the counterexample is false on the core itself: <claim>` |
+| 1 | the counterexample holds on the core as it is — **where the law applies**: if every premise the instance carries holds on the core, the claim must hold too. A premise that is false on the core leaves nothing to check the claim against, and check 1 passes vacuously | `the counterexample is false on the core itself: <claim>` |
 | 2 | each premise `at` instantiates holds on the mutant | `the law's premise "<binder>" is false on the mutant, so this instance is not a counterexample: <premise>` |
 | 3 | the counterexample fails on the mutated core | `the counterexample still holds on the mutant, so the law is not shown false: <claim>` |
 | 4 | the law's proof checks on the core as it is | `the proof does not check even unmutated (<location>)` |
@@ -364,6 +402,29 @@ Checks 1 to 3 are what make `why` a checked claim. A proof that fails on a
 mutant where the law still holds would otherwise count as a kill (check 3), and
 a proof that still checks against a false law would be saying nothing about the
 core (check 5).
+
+**Check 1 is conditional for an `at` instance, because a mutant can move a
+law's premise instead of its claim.** A law is a statement about the values its
+premises admit, so where a premise is false the law says nothing, and a mutant
+is free to be wrong there. Say a law's premise is `C.gate(n) == True{}`, and the
+gate admits only `0n`, while the claim is `C.answer(n) == 0n`. A mutant that
+widens the gate to admit `1n`, where `C.answer` is `1n` and the claim wants
+`0n`, is a counterexample — but on the core that instance's premise is *already*
+false, because the gate never admitted `1n`. So there is no instance of the law
+to hold the claim against, and check 1 passes without the claim being true.
+What is left is exactly what makes it a counterexample: checks 2 to 5 — the
+mutant's premise holds there, the claim fails there, the proof checks
+unmutated, and the proof breaks in `failsIn`. The mutant's line says the check
+was vacuous:
+
+```
+  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in LAWS.answer_zero_under_gate  (premise false on the core)
+```
+
+That row is the fixture's (`test/tree/group/proj`), which `sh test.sh` runs
+along with `examples/plus0`.
+
+A `counter` has no premise, so its check 1 is unconditional, as it always was.
 
 A mutant with neither `at` nor `counter` is refused before any check runs:
 `no counterexample: give "at" with a value for each of the law's binders, or
@@ -381,19 +442,25 @@ A mutant whose counterexample is written by hand says so on its line:
   shift_same                 PASS  false when the step adds two; fails in LAWS.shift_same  (counter not tied to the law)
 ```
 
+and one whose check 1 was vacuous says that:
+
+```
+  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in LAWS.answer_zero_under_gate  (premise false on the core)
+```
+
 and the run ends with
 
 ```
-PASS: all 3 mutants are false laws, and break the proof they target
+PASS: all 4 mutants are false laws, and break the proof they target
 ```
 
 or, with a non-zero exit,
 
 ```
-FAIL: 1 of 3 mutants did not break the proof they target
+FAIL: 1 of 4 mutants did not break the proof they target
 ```
 
-Read the count as "1 of the 3 mutants failed".
+Read the count as "1 of the 4 mutants failed".
 
 ---
 
@@ -416,6 +483,26 @@ law plus0_same:
 Pick the smallest literal that separates the two cores. If the mutant turns
 `plus0` into `Nat.add(n, 1n)`, `0n` does: the instance holds on the core and
 fails on the mutant. One literal is usually enough.
+
+An equality between two `Nat`s is one claim shape, not the only one. A law whose
+claim is `Bool`-valued is read the same way:
+
+```bend
+law plus0_agree:
+  for +n: Nat
+  {Nat.is_eq(C.plus0(n), C.plus0_slow(n)) == True{} : Bool}
+```
+
+```jsonc
+"at": { "n": "0n" }      // the instance is {Nat.is_eq(C.plus0(0n), C.plus0_slow(0n)) == True{} : Bool}
+```
+
+Nothing about the table changes with the type: `at` substitutes names in the
+claim and in the premises, and the instance file closes by `{==}` as before. A
+Bool law's *proof* is an ordinary proof — this one rewrites with `cmp_refl_r`,
+which lives in `examples/plus0/PROOF.bend`'s tools section, and with `add_zero`
+— and its mutant mutates `plus0` so the two spellings stop agreeing, a
+disagreement `0n` separates.
 
 The tool writes the instance into a file of its own as
 
@@ -459,9 +546,10 @@ the law's claim and in the law's premises:
   the equation must hold on the **mutant** — otherwise the instance is not one
   the law is about, and the run says so:
   `the law's premise "h" is false on the mutant, so this instance is not a
-  counterexample: <premise>`. A law whose proof rewrites with a premise is
-  still a law `at` states, as long as the claim does not read the premise's
-  own name.
+  counterexample: <premise>`. A premise that is false on the **core** is not a
+  refusal: it makes check 1 vacuous, and the run's line says so (§5). A law
+  whose proof rewrites with a premise is still a law `at` states, as long as the
+  claim does not read the premise's own name.
 
 ### `counter`: the fallback
 
@@ -485,22 +573,40 @@ Reach for it when:
 - **a binder's type names another binder, and no value of it can be written**
   for the case the mutant is about — `for +x: C.Meaning(s)`, where the schema
   the mutant concerns has no writable meaning.
-- **the mutation falsifies a premise rather than the claim.** Then no instance
-  of the law is false on the mutant, and what you are stating is the premise:
+- **the claim reads a premise's proof term.** `for h: {C.wf(s) == True{} : Bool}`
+  is a value `at` can instantiate, but a claim like `{C.dec(s, enc(s, x)) ==
+  f(h) : T}` reads `h` itself, and there is no literal to put there:
+  `the claim of <law> mentions "h", and at gives no value for it`.
+- **the mutation moves the premise and the claim still holds on the mutant.**
+  Then no instance of the law is false on the mutant, and what you are stating
+  is the premise:
 
   ```jsonc
-  // decode_encode, whose mutation strengthens wf: dec and enc never read wf,
-  // so the round trip still holds -- the premise is what moved
+  // decode_encode, whose mutation drops a conjunct of wf: dec and enc never
+  // read wf, so the round trip still holds -- the premise is what moved
   "counter": "{C.wf(C.SField{\"a\", C.SNat{}, C.SField{\"a\", C.SNat{}, C.SEnd{}}}) == False{} : Bool}"
   ```
 
+  This is not the same case as a mutant that *admits* a value the law never
+  covered and gets that value wrong: there the claim is false on the mutant, so
+  the row is an `at` instance, and check 1 is vacuous on the core. §5 has it.
+
+So: `at` takes any claim of the form `{... : T}`, whatever `T` is — `Nat`,
+`Bool`, `Cmp`, a `Maybe`. `counter` takes a claim of any shape at all, at the
+price of no longer being tied to the law.
+
 Rules for a `counter`:
 
-- **`C` is `core.bend`.** The instance file starts with `import Base` and
-  `import ./core.bend as C`, then **every other import `LAWS.bend` has**,
-  verbatim. So a claim may name `C`, and may name anything else the laws
-  import by its alias. `LAWS.bend`'s own import of the core is left out: one
-  file under two names is a checker error.
+- **`C` is `core.bend`.** The instance file is built, not copied: it starts with
+  `import Base` and `import ./core.bend as C`, then carries **every other import
+  `LAWS.bend` has**, verbatim — the alias and all. So a claim may name `C`, and
+  may name anything else the laws import by its alias.
+  Those two lines are **not** repeated: an import of `Base`, or of
+  `./core.bend`, in `LAWS.bend` is dropped from the copy, so `Base` and the core
+  each appear exactly once whatever the laws import. (`import Base` twice is a
+  checker error, and the core under two names — `C`, and the laws' own alias —
+  is the same error.) The test is the import's path: `import Base as B` and
+  `import ./core.bend` without an alias are dropped as well.
 - **A claim may not call a law or a proof def.** Only the core and the other
   imports are in scope, and the body is `{==}` — there is no proof to write.
 - **Keep the literals small.** The checker walks numerals down, and a big one
@@ -674,7 +780,7 @@ Every message the tool can print, and what it means.
 
 | message | cause |
 | --- | --- |
-| `COUNTEREXAMPLE <name>: expected <E> / observed <O>` | the instance `<name>` is false; `<E>` is the left side, `<O>` the right |
+| `COUNTEREXAMPLE <name>: expected <E> / observed <O>` | the instance `<name>` is false, and `<E>` is its **left** side with `<O>` its right. The claim `{C.plus0(3n) == 4n : Nat}` prints `COUNTEREXAMPLE plus0_three: expected 3n / observed 4n`: `3n` is what `C.plus0(3n)` evaluates to, `4n` is what the claim's right side says. So `observed` is your claim's right-hand side, not a description of a fault |
 | `<n> of <N> instances fail:` | `--each` found `<n>` failures, each printed with its claim |
 | `TIMEOUT: the checker ran past 5 s: a problem to fix, not a limit to raise` | an instance does not check in 5 s — a large constant, a loop unfolded into a goal |
 | the checker's own output, with no `Location:` | the spec did not compile: a bad import path, or claim syntax the checker rejects. The imports are resolved against the **spec file's directory** |
@@ -697,7 +803,7 @@ to the next mutant.
 | `at names "<k>", which the law <law> does not bind` | a key of `at` is not one of the law's binders |
 | `the claim of <law> mentions "<b>", and at gives no value for it` | the claim reads a binder `at` has no value for — a premise's own name is the usual one |
 | `the premise "<h>" of <law> mentions "<b>", and at gives no value for it` | a premise reads a binder `at` has no value for |
-| `the counterexample is false on the core itself: <claim>` | the instance does not hold before the mutation. With `at` this is the claim the tool built: a value of the wrong type, or a law that is false where you instantiated it |
+| `the counterexample is false on the core itself: <claim>` | the claim does not hold before the mutation, and every premise the instance carries holds there — so the instance is not one the law covers. With `at` this is the claim the tool built: a value of the wrong type, or a law that is false where you instantiated it. A premise that is false on the **core** does not produce this: check 1 is vacuous then, and the line says so (§5) |
 | `the law's premise "<h>" is false on the mutant, so this instance is not a counterexample: <premise>` | the instance does not satisfy the law's hypothesis after the mutation, so the law says nothing about it |
 | `the counterexample still holds on the mutant, so the law is not shown false: <claim>` | the mutation does not change that instance; pick literal values the mutation moves |
 | `the proof does not check even unmutated (<location>)` | the proof needs a section the run dropped — name it in `with` — or it was already broken |
@@ -710,6 +816,7 @@ is not printed)
 | message | cause |
 | --- | --- |
 | `FAIL: <file>: import <rel> does not exist: <abs>` | an import of `core.bend`, `LAWS.bend` or `PROOF.bend` names nothing on disk. Reported before any check, with the file that makes the import |
+| `FAIL: PROOF.bend: duplicate section header "# ---- <name> ----" (lines <a>, <b>); give each section its own name` | two `# ---- <name> ----` headers are identical. Both sections would be kept under one name and their text concatenated, so the proof would break somewhere that names neither. Every line the repeated header sits on is listed |
 | `<law>: no section "<section>" in PROOF.bend` | no `# ---- <section> ----` header with that exact text. Usually a header that does not match the format, or a `section` copied from another law |
 | `no mutant has the section "<sec>", so its law is unknown` | a `with` entry that names a section no mutant in the table has. Every name in `with` must be some row's `section` |
 | `import <rel>: would land outside the scratch tree` | an import whose `..` climbs past the scratch root |
@@ -738,6 +845,6 @@ Larger worked examples: [`bend-schema`](https://github.com/nohzafk/bend-schema)
 spec that generates its instances, and takes `CORE=` to point at a mutated
 core).
 
-The example beside this file: `examples/plus0/` — three laws, three mutants,
-one of them proved `with` another, and a spec of three instances. `sh test.sh`
-runs all of it.
+The example beside this file: `examples/plus0/` — four laws, one of them
+Bool-valued, four mutants, one of them proved `with` another, and a spec of
+three instances. `sh test.sh` runs all of it.

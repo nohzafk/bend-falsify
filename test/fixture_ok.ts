@@ -12,4 +12,12 @@ runMutants(import.meta.dir + "/tree/group/proj", [
     why: "keep2 adds one", at: { n: "0n" }, failsIn: "LAWS.keep2_when_keep" },
   { law: "shift_same", section: "the file import steps by one", from: "  S.bump(n)", to: "  Nat.add(n, 2n)",
     why: "the step adds two", counter: "{C.shift(1n) == Nat.add(1n, 1n) : Nat}", failsIn: "LAWS.shift_same" },
+  // A mutant that relaxes the law's premise rather than falsifying its claim:
+  // the gate now admits 1n, where the answer is 1n and the claim wants 0n. The
+  // premise is false on the core there, so check 1 is vacuous and the run says
+  // so -- the row is a counterexample all the same.
+  { law: "answer_zero_under_gate", section: "under the gate, the answer is zero",
+    from: "      False{}", to: "      True{}",
+    why: "the gate admits every value, and the answer is 1n above 0n",
+    at: { n: "1n" }, failsIn: "LAWS.answer_zero_under_gate" },
 ]);

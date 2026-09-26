@@ -36,5 +36,14 @@
     "why": "keep2 adds one",
     "at": { "n": "0n" },
     "failsIn": "LAWS.keep2_when_keep"
+  },
+  {
+    "law": "answer_zero_under_gate",
+    "section": "under the gate, the answer is zero",
+    "from": "      False{}",
+    "to": "      True{}",
+    "why": "the gate admits every value, and the answer is 1n above 0n",
+    "at": { "n": "1n" },
+    "failsIn": "LAWS.answer_zero_under_gate"
   }
 ]

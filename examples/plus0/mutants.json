@@ -30,5 +30,15 @@
     "with": [
       "plus0 adds nothing"
     ]
+  },
+  {
+    "law": "plus0_agree",
+    "section": "the two spellings agree",
+    "from": "  Nat.add(n, 0n)",
+    "to": "  Nat.add(n, 1n)",
+    "nth": 1,
+    "why": "plus0 adds one, so the two spellings stop agreeing",
+    "at": { "n": "0n" },
+    "failsIn": "LAWS.plus0_agree"
   }
 ]

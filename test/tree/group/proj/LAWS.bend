@@ -19,3 +19,11 @@ law keep2_when_keep:
   for n: Nat
   for h: {C.keep(n) == n : Nat}
   {C.keep2(n) == n : Nat}
+
+# A law whose premise is a gate: 0n is the only value it admits, and the
+# answer is 0n only there. A mutant that widens the gate admits a value the
+# law never covered.
+law answer_zero_under_gate:
+  for n: Nat
+  for h: {C.gate(n) == True{} : Bool}
+  {C.answer(n) == 0n : Nat}
