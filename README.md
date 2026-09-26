@@ -319,8 +319,10 @@ Rules:
   `plus0_same_2`.
 - Put the executable definitions in `core.bend`. A `def` in `LAWS.bend`
   survives every run — the split keeps every block that does not begin with
-  `law ` — so a helper there is always in scope. A *section* of `PROOF.bend` is
-  not: only the tools sections and the sections a mutant names are kept.
+  `law ` — so a helper there is always in scope, and it is in scope in the file
+  an `at` instance is checked in too, which is this file with the laws removed
+  (§6). A *section* of `PROOF.bend` is not: only the tools sections and the
+  sections a mutant names are kept.
 - A `with` name is a **section** name, not a law name, and some mutant in the
   same table must have that section. Otherwise the run stops with
   `no mutant has the section "<section>", so its law is unknown`.
@@ -426,9 +428,9 @@ along with `examples/plus0`.
 
 A `counter` has no premise, so its check 1 is unconditional, as it always was.
 
-The instance is checked in a file of its own, built from `LAWS.bend`'s imports,
-so the core is in scope there under the alias the laws give it (§6) and every
-other name a law's statement uses is in scope too. Check 1's
+The instance is checked in a file of its own, which is `LAWS.bend` itself with
+every law removed: the core is in scope there under the alias the laws give it,
+and so is every `def` the laws declare (§6). Check 1's
 `the counterexample is false on the core itself` is therefore about the core,
 not about a name the instance file failed to bring in.
 
@@ -510,16 +512,19 @@ which lives in `examples/plus0/PROOF.bend`'s tools section, and with `add_zero`
 — and its mutant mutates `plus0` so the two spellings stop agreeing, a
 disagreement `0n` separates.
 
-The tool writes the instance into a file of its own as
+The tool writes the instance into a file of its own: `LAWS.bend` with every law
+removed, and then
 
 ```bend
 def counter() -> <the instantiated claim>:
   {==}
 ```
 
-so both sides must reduce to the same term on the core, and must not on the
-mutant. There is no hypothesis, no variable, and no proof: `{==}` closes it or
-it does not.
+appended. So both sides must reduce to the same term on the core, and must not
+on the mutant. There is no hypothesis, no variable, and no proof: `{==}` closes
+it or it does not. The def's name is `counter`, unless `LAWS.bend` declares a
+def by that name — the appended def would then be a second one — in which case
+the tool steps aside to `counter_`, and on to `counter__` after that.
 
 ### The substitution rule, exactly
 
@@ -546,15 +551,30 @@ the law's claim and in the law's premises:
   law does not bind is refused with
   `at names "m", which the law plus0_same does not bind`.
 - **A value names the core the way `LAWS.bend` does.** The instance file is
-  built, not copied, and it imports the core under the alias the laws give it:
-  a law written in a file that says `import ./core.bend as Core` is checked as
+  `LAWS.bend` itself with every law removed, so it imports the core under the
+  alias the laws give it, and carries every other import the laws' file has: a
+  law written in a file that says `import ./core.bend as Core` is checked as
   `Core.plus0(0n) == 0n`, and one whose file says `import ./core.bend as C` is
-  checked as `C.plus0(0n) == 0n`, as before. The alias is read from the laws'
-  own `import ./core.bend as <alias>` line, so a project can name its core
-  whatever it likes: a law that says `Core.` is checked as `Core.`, not refused
-  as a name that is not in scope. What the values in `at` name the core with is
-  the same alias: `{"n": "0n"}` needs no module, but a value of the core's own
-  type does, and it has to be written the way the law's file writes it.
+  checked as `C.plus0(0n) == 0n`, as before. Nothing is read out of the laws'
+  import lines and rewritten: the file is the laws' own, so a project can name
+  its core whatever it likes and a law that says `Core.` is checked as `Core.`,
+  not refused as a name that is not in scope. What the values in `at` name the
+  core with is the same alias: `{"n": "0n"}` needs no module, but a value of the
+  core's own type does, and it has to be written the way the law's file writes
+  it.
+- **So is every `def` `LAWS.bend` declares.** The laws' `def`s stay in the
+  instance file — a `law <name>:` block is the only thing removed — which is
+  what lets a law state its claim in a type of its own file. A claim typed
+  `{C.quote_under(raw, n, lim) == Done{...} : Q()}` and a premise typed
+  `{C.validate(raw) == Done{plan} : R()}`, with `Q()` and `R()` defs of
+  `LAWS.bend`, are both instances `at` states and the checker accepts. Before
+  this rule the instance file was built from the laws' *imports* alone, and both
+  shapes were refused — the claim with
+  `the counterexample is false on the core itself: {... : Q()}`, the premise with
+  `the law's premise "h" is false on the mutant, so this instance is not a
+  counterexample: {... : R()}` — since `Q` and `R` were not names the file had.
+  `test/tree/named` is the fixture, and `sh test.sh` runs it, and strips the def
+  to show the row is refused without it.
 - **A binder the claim reads needs a value too**, whatever kind it is:
   `the claim of uses_premise mentions "h", and at gives no value for it`.
 - **A binder whose type is a `{...}` equation is a premise**, and needs no
@@ -619,7 +639,10 @@ Rules for a `counter`:
   may name anything else the laws import by its alias. A `counter` is written
   by hand and names the core `C` **whatever the laws call it** — that is the one
   place the two kinds of counterexample differ, since an `at` instance is
-  checked under the laws' own alias (the rule above).
+  checked in the laws' own file (the rule above), alias and `def`s and all. A
+  `def` of `LAWS.bend` is therefore in scope for an `at` instance and **not**
+  for a `counter`: a counter that is typed by one has to be written as the
+  type's expansion instead.
   Those two lines are **not** repeated: an import of `Base`, or of
   `./core.bend`, in `LAWS.bend` is dropped from the copy, so `Base` and the core
   each appear exactly once whatever the laws import. The test is the import's
@@ -822,7 +845,7 @@ to the next mutant.
 | `at names "<k>", which the law <law> does not bind` | a key of `at` is not one of the law's binders |
 | `the claim of <law> mentions "<b>", and at gives no value for it` | the claim reads a binder `at` has no value for — a premise's own name is the usual one |
 | `the premise "<h>" of <law> mentions "<b>", and at gives no value for it` | a premise reads a binder `at` has no value for |
-| `the counterexample is false on the core itself: <claim>` | the claim does not hold before the mutation, and every premise the instance carries holds there — so the instance is not one the law covers. With `at` this is the claim the tool built: a value of the wrong type, or a law that is false where you instantiated it. A premise that is false on the **core** does not produce this: check 1 is vacuous then, and the line says so (§5). A name that is not in scope is not a cause any more for `at` — the instance file imports the core under the alias `LAWS.bend` gives it (§6) — but it is for a `counter`, which names the core `C`: a counter that says `Core.` while its file imports the core as `C` fails here |
+| `the counterexample is false on the core itself: <claim>` | the claim does not hold before the mutation, and every premise the instance carries holds there — so the instance is not one the law covers. With `at` this is the claim the tool built: a value of the wrong type, or a law that is false where you instantiated it. A premise that is false on the **core** does not produce this: check 1 is vacuous then, and the line says so (§5). A name that is not in scope is not a cause for `at` — the instance file is `LAWS.bend` itself, so every name the laws' file declares is there (§6) — but it is for a `counter`, which is built from the laws' imports alone and names the core `C`: a counter that says `Core.`, or that is typed by a `def` of `LAWS.bend`, fails here |
 | `the law's premise "<h>" is false on the mutant, so this instance is not a counterexample: <premise>` | the instance does not satisfy the law's hypothesis after the mutation, so the law says nothing about it |
 | `the counterexample still holds on the mutant, so the law is not shown false: <claim>` | the mutation does not change that instance; pick literal values the mutation moves |
 | `the proof does not check even unmutated (<location>)` | the proof needs a section the run dropped — name it in `with` — or it was already broken |

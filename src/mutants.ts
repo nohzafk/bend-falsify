@@ -31,10 +31,12 @@
 // hand (`counter`) is still accepted for a law shape `at` cannot express, and
 // its report line says that nothing ties it to the law.
 //
-// The instance file imports the core under the alias LAWS.bend gives it, so an
-// `at` instance is written in the laws' own namespace: a law that says `Core.`
-// is checked against `Core.`, whatever alias the laws chose. A hand-written
-// `counter` names the core `C`, and its file imports it as `C`.
+// The instance file for an `at` row is LAWS.bend's own text with every law
+// removed, so an `at` instance is written in the laws' own namespace: the core
+// under whatever alias the laws import it as, and every def LAWS.bend declares
+// -- a claim typed `Q()`, a premise typed `R()`. A hand-written `counter` is a
+// file built from the laws' imports alone: it names the core `C`, and no def of
+// LAWS.bend is in scope for it.
 //
 // Isolating one section per law matters: the checker stops at the first
 // failing def, and proofs over the same definitions break together, so a mutant
@@ -342,28 +344,42 @@ export function lawInstance(law: Law, at: Record<string, string>): Instance {
   return { claim: substitute(law.claim, at), premises };
 }
 
-// The name LAWS.bend imports the core under. An `at` instance is the law's
-// statement as written, so it has to import the core under the name that
-// statement uses: a law written against `import ./core.bend as Core` names
-// `Core.`, and an instance that imported the core as `C` would name a module
-// that is not in scope there. A LAWS.bend that does not import the core names
-// it nowhere, and `C` is then as good as anything.
-export function coreAlias(laws: string): string {
-  return /^import\s+\.\/core\.bend\s+as\s+(\S+)[ \t]*$/m.exec(laws)?.[1] ?? "C";
+// The head of the file an `at` instance is checked in: LAWS.bend's own text,
+// with every law removed -- its imports, its defs and its comments stay. An
+// `at` instance is the law's statement as written, and a statement may name
+// anything the laws' file names: the core under the alias that file imports it
+// as, and any def the file declares. A head built from the imports alone leaves
+// those defs out of scope, and an instance that names one is refused as a name
+// that is not defined.
+export function instanceHead(laws: string): string {
+  return onlyLaws(laws, []);
 }
 
-// The counterexample file's imports: the core under `alias`, and every other
-// import LAWS.bend has, so a claim can name what a law's statement names
+// The name of the def the instance is appended as. `counter`, unless the head
+// declares a def by that name -- the head is the laws' own text, so a def there
+// would collide with the one appended.
+export function instanceDefName(head: string): string {
+  let name = "counter";
+  while (new RegExp(`^def ${name}\\b`, "m").test(head)) name = `${name}_`;
+  return name;
+}
+
+// The counterexample file's imports: `Base`, the core under `C`, and every
+// other import LAWS.bend has, so a claim can name what a law's statement names
 // (another package's error type, say). LAWS.bend's own import of the core is
 // left out, and so is `Base`: each appears once, under the one name the claim
 // in this file uses. (Measured on bend 2.0.28: two names for one file check
 // fine, and so does `import Base` twice -- the core is imported once all the
 // same, so nothing here rests on a checker's tolerance of either.)
-export function counterImports(laws: string, alias = "C"): string {
+//
+// This is the head of a `counter` row only, and a `counter` names the core `C`
+// whatever the laws call it. An `at` row's head is the laws' whole file
+// (instanceHead above), which brings its defs and its own alias along.
+export function counterImports(laws: string): string {
   const others = [...laws.matchAll(/^import (\S+)(?: as (\S+))?[ \t]*$/gm)]
     .filter(([, path]) => path !== "Base" && path !== "./core.bend")
     .map(([line]) => line);
-  return ["import Base", `import ./core.bend as ${alias}`, ...others].join("\n");
+  return ["import Base", "import ./core.bend as C", ...others].join("\n");
 }
 
 // Where the project sits in the scratch tree: under its own last `depth`
@@ -390,11 +406,15 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const { paths, depth } = relativeImports([core, laws, proof]);
   // Two heads, because the two kinds of counterexample are written in two
   // namespaces. An `at` instance is the law's statement as written, so its file
-  // imports the core under the alias LAWS.bend gives it. A hand-written
-  // `counter` names the core `C` -- §6 of the README -- whatever the laws call
-  // it, and its file imports it as `C`.
-  const atHead = counterImports(laws, coreAlias(laws));
-  const counterHead = counterImports(laws);
+  // is LAWS.bend itself with the laws removed: the core under the laws' own
+  // alias, and the laws' own defs, both in scope. A hand-written `counter`
+  // names the core `C` -- §6 of the README -- whatever the laws call it, and
+  // its file is built from the laws' imports alone, so no def of LAWS.bend is
+  // in scope for it. `def` is the name the instance is appended as, which has
+  // to avoid the names the laws' own file declares.
+  const atHead = instanceHead(laws);
+  const atFile = { head: atHead, def: instanceDefName(atHead) };
+  const counterFile = { head: counterImports(laws), def: "counter" };
 
   // Two sections with one name would be kept together, and their text
   // concatenated, so the proof would break somewhere that names neither:
@@ -448,11 +468,12 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   }
 
   // Does this equation close against this core? The checker runs the code, so
-  // it holds exactly when both sides reduce to the same term. `head` is the
-  // file's imports: the two namespaces above differ in nothing else.
-  function checkClaim(coreText: string, claim: string, head: string): { ok: boolean; location: string } {
+  // it holds exactly when both sides reduce to the same term. `file` is the
+  // instance file's head and the name the instance is appended as: the two
+  // namespaces above differ in nothing else.
+  function checkClaim(coreText: string, claim: string, file: { head: string; def: string }): { ok: boolean; location: string } {
     return inScratch(coreText, (dir) => {
-      writeFileSync(join(dir, "INSTANCE.bend"), `${head}\n\ndef counter() -> ${claim}:\n  {==}\n`);
+      writeFileSync(join(dir, "INSTANCE.bend"), `${file.head}\n\ndef ${file.def}() -> ${claim}:\n  {==}\n`);
       return bend(dir, "INSTANCE.bend", true);
     });
   }
@@ -488,9 +509,9 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
 
     let claim: string;
     let premises: Instance["premises"] = [];
-    let head = counterHead;
+    let file = counterFile;
     if (m.at !== undefined) {
-      head = atHead;
+      file = atFile;
       try {
         const inst = lawInstance(readLaw(laws, m.law), m.at);
         claim = inst.claim;
@@ -519,17 +540,17 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     // premise is false, so a mutant that makes the premise false on the core
     // leaves nothing for the claim to hold against. Checks 2 to 5 still run,
     // so the row stays a checked claim. A `counter` carries no premise.
-    const falseOnCore = premises.find((p) => !checkClaim(core, p.equation, head).ok);
-    if (falseOnCore === undefined && !checkClaim(core, claim, head).ok) {
+    const falseOnCore = premises.find((p) => !checkClaim(core, p.equation, file).ok);
+    if (falseOnCore === undefined && !checkClaim(core, claim, file).ok) {
       fail(`the counterexample is false on the core itself: ${claim}`);
       continue;
     }
-    const falsePremise = premises.find((p) => !checkClaim(mutated, p.equation, head).ok);
+    const falsePremise = premises.find((p) => !checkClaim(mutated, p.equation, file).ok);
     if (falsePremise) {
       fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
       continue;
     }
-    if (checkClaim(mutated, claim, head).ok) {
+    if (checkClaim(mutated, claim, file).ok) {
       fail(`the counterexample still holds on the mutant, so the law is not shown false: ${claim}`);
       continue;
     }

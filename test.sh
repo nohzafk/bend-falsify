@@ -13,7 +13,11 @@
 #      which is what a file import would look like unwired -- and two sections
 #      under one header; and the fixture whose LAWS.bend aliases the core,
 #      where an `at` row passes and a `counter` row still names the core `C`
-#   5. the source typechecks
+#   5. an `at` instance is checked in LAWS.bend itself, with the laws removed,
+#      so a claim or a premise typed by a def of LAWS.bend is in scope -- and
+#      the control that the def is what carries it: strip the def and the row
+#      is refused, with the message the old head gave for every row here
+#   6. the source typechecks
 #
 # Usage: sh test.sh
 
@@ -94,15 +98,15 @@ bun src/falsify.ts mutants "$TMP/tree-nobinder/group/proj" | grep -q 'at gives n
 echo "  at with a binder left out is refused"
 
 # A law whose LAWS.bend imports the core under an alias other than C. An `at`
-# instance is the law's statement as written, so the file it is checked in has
-# to import the core under that alias -- a file that always said `C` would
-# refuse the instance as a name that is not in scope. The fixture's second row
-# is a hand-written `counter`, which names the core `C` whatever the laws call
-# it, and says on its line that nothing ties it to the law.
+# instance is the law's statement as written, so the file it is checked in is
+# LAWS.bend itself, laws removed -- a file that always said `C` would refuse
+# the instance as a name that is not in scope. The fixture's second row is a
+# hand-written `counter`, which names the core `C` whatever the laws call it,
+# and says on its line that nothing ties it to the law.
 bun src/falsify.ts mutants test/tree/aliased > /tmp/bend-falsify-aliased.log 2>&1 || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: the fixture whose laws alias the core"; exit 1; }
 grep -q "PASS: all 2 mutants" /tmp/bend-falsify-aliased.log || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: the fixture whose laws alias the core"; exit 1; }
 grep -q "(counter not tied to the law)" /tmp/bend-falsify-aliased.log || { cat /tmp/bend-falsify-aliased.log; echo "FAIL: a counter row did not say it is untied"; exit 1; }
-echo "  an at instance is built under the alias LAWS.bend imports the core as"
+echo "  an at instance is built in the laws' own file, under their own alias"
 
 # An import that names nothing stops the run by name -- the file that makes it,
 # and the import -- before any check runs.
@@ -120,7 +124,31 @@ mv "$TMP/p" "$TMP/tree-dup/group/proj/PROOF.bend"
 bun src/falsify.ts mutants "$TMP/tree-dup/group/proj" 2>&1 | grep -q 'duplicate section header "# ---- double adds ----"' || { echo "FAIL: two sections under one header were not refused"; exit 1; }
 echo "  two sections under one header are refused by name and line"
 
-echo "== 5. the types =="
+echo "== 5. an at instance is checked in the laws' own file =="
+# An `at` instance is the law's statement as written, so the file it is checked
+# in is LAWS.bend itself with every law removed: the core under the laws' own
+# alias, and every def LAWS.bend declares. Both rows of this fixture are typed
+# by a def of LAWS.bend -- one's claim is a `{... : Step()}`, the other's
+# premise a `{... : Ok()}` -- and a head built from the laws' imports alone
+# leaves those defs out, which is how both rows read before this rule:
+#
+#   plus0_same        FAIL  the counterexample is false on the core itself: {C.plus0(0n) == 0n : Step()}
+#   plus0_under_gate  FAIL  the law's premise "h" is false on the mutant, so this
+#                           instance is not a counterexample: {C.gate(0n) == True{} : Ok()}
+bun src/falsify.ts mutants test/tree/named > /tmp/bend-falsify-named.log 2>&1 || { cat /tmp/bend-falsify-named.log; echo "FAIL: the fixture whose laws declare the types their statements use"; exit 1; }
+grep -q "PASS: all 2 mutants" /tmp/bend-falsify-named.log || { cat /tmp/bend-falsify-named.log; echo "FAIL: the fixture whose laws declare the types their statements use"; exit 1; }
+echo "  a claim, and a premise, typed by a def of LAWS.bend are both in scope"
+
+# The def has to be what carries the row: strip it from a copy and require the
+# row to be refused. Without this control the fixture would pass for any reason
+# at all, the def's presence being the one thing it is about.
+cp -R test/tree/named "$TMP/named-nodef"
+sed '/^def Step() -> Type: Nat$/d' "$TMP/named-nodef/LAWS.bend" > "$TMP/l"
+mv "$TMP/l" "$TMP/named-nodef/LAWS.bend"
+bun src/falsify.ts mutants "$TMP/named-nodef" 2>&1 | grep -q "the counterexample is false on the core itself: {C.plus0(0n) == 0n : Step()}" || { echo "FAIL: a claim typed by a def LAWS.bend does not declare was not refused"; exit 1; }
+echo "  strip the def, and the row is refused by the name it cannot resolve"
+
+echo "== 6. the types =="
 bunx tsc -p .
 
 echo "PASS: bend-falsify's gate"

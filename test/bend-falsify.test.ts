@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, coreAlias, counterImports, duplicateSections, importSites, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
+import { type Law, counterImports, duplicateSections, importSites, instanceDefName, instanceHead, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -36,19 +36,54 @@ test("the project sits under its real ancestors, deep enough for every import", 
 test("the counterexample file imports the core as C and the laws' other imports", () => {
   const h = counterImports("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S\n\nlaw x:\n");
   expect(h).toBe("import Base\nimport ./core.bend as C\nimport ../../s/core.bend as S");
-  // under another alias, for an `at` instance: the law's statement as written
-  // says `Core.`, so that is the name the file has to give the core
-  expect(counterImports("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S\n", "Core"))
-    .toBe("import Base\nimport ./core.bend as Core\nimport ../../s/core.bend as S");
+  // a `counter` names the core `C` whatever the laws call it: the alias the
+  // laws chose is not carried over, which is what makes the two kinds of
+  // counterexample differ
+  expect(counterImports("import Base\nimport ./core.bend as Core\n")).toBe("import Base\nimport ./core.bend as C");
 });
 
-test("the core's alias is the one LAWS.bend imports it under", () => {
-  expect(coreAlias("import Base\nimport ./core.bend as Core\n")).toBe("Core");
-  expect(coreAlias("import Base\nimport ./core.bend as C\n")).toBe("C");
-  expect(coreAlias("import Base\nimport ./core.bend as Core2\n\nlaw x:\n")).toBe("Core2");
-  // laws that name no core: C, which is what the tool has always used
-  expect(coreAlias("import Base\nimport ./sub/k.bend as K\n")).toBe("C");
-  expect(coreAlias("import Base\nimport ../shared.bend as S\n")).toBe("C");
+test("an at instance's file is LAWS.bend itself, with every law removed", () => {
+  const laws = `import Base
+import ./core.bend as Core
+import ../../s/core.bend as S
+
+# a def of the laws' own, which the instance file has to bring in
+def Q() -> Type: Nat
+
+law plus0_same:
+  for n: Nat
+  {Core.plus0(n) == n : Q()}
+
+# the next one
+law other:
+  for n: Nat
+  {Core.plus0(n) == n : Nat}
+`;
+  const head = instanceHead(laws);
+  // the imports stay, under the laws' own alias -- so an instance written the
+  // way the law is written is in scope
+  expect(head).toContain("import ./core.bend as Core");
+  expect(head).toContain("import ../../s/core.bend as S");
+  // and so do the laws' defs, which a claim or a premise may be typed by
+  expect(head).toContain("def Q() -> Type: Nat");
+  // every law is gone: a law is not a name an instance can use
+  expect(head).not.toContain("law plus0_same");
+  expect(head).not.toContain("law other");
+  expect(instanceDefName(head)).toBe("counter");
+});
+
+test("the instance def's name steps aside for a def LAWS.bend declares", () => {
+  expect(instanceDefName("import Base\nimport ./core.bend as C\n")).toBe("counter");
+  expect(instanceDefName("def counter() -> Type: Nat\n")).toBe("counter_");
+  expect(instanceDefName("def counter_() -> Type: Nat\ndef counter() -> Type: Nat\n")).toBe("counter__");
+  // a longer name is a different name
+  expect(instanceDefName("def counters() -> Type: Nat\n")).toBe("counter");
+});
+
+test("an at instance is checked in the laws' own file, defs and all", () => {
+  const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/named`);
+  expect(r.out).toContain("PASS: all 2 mutants");
+  expect(r.code).toBe(0);
 });
 
 test("an at instance is built under the alias LAWS.bend uses", () => {
