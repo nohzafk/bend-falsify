@@ -15,12 +15,21 @@ Every checker run is limited to 5 s. A check that runs longer is a problem to fi
 
 ## Install
 
+Both ways need `bun` and `bend` on `PATH`.
+
+**A pure Bend project** needs no `package.json`. Keep the table and the specs as JSON, and run the package straight from GitHub. Pin a commit with `#<sha>`:
+
+```sh
+bunx github:nohzafk/bend-falsify mutants .        # reads ./mutants.json
+bunx github:nohzafk/bend-falsify spec.json [--each]
+```
+
+**A TypeScript project** adds it as a dev dependency. It can then write the table in TS and call `runMutants`, and write specs that compute their instances:
+
 ```jsonc
 // package.json
 "devDependencies": { "bend-falsify": "github:nohzafk/bend-falsify" }
 ```
-
-`bend` must be on `PATH`.
 
 ## Falsifying a law
 
@@ -34,6 +43,8 @@ export default {
   ],
 };
 ```
+
+A spec can also be JSON with the same fields. A `.ts` spec is run, so it can generate its instances.
 
 `bunx bend-falsify spec.ts` checks all instances in one run and reports the first counterexample. `--each` checks every instance alone, in parallel, and lists every counterexample.
 
@@ -53,6 +64,8 @@ const MUTANTS: Mutant[] = [
 ];
 runMutants(import.meta.dir, MUTANTS);
 ```
+
+As data, the same table is a `mutants.json` array of these objects, kept beside `core.bend` and run with `bend-falsify mutants <dir>`.
 
 - A law proved from other laws names their sections in `with`.
 - When the `from` line occurs more than once in `core.bend`, `nth` says which occurrence (1 is the first). Without it, a repeated line is refused as ambiguous.

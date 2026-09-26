@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // Falsify candidate laws on concrete inputs, with the Bend checker as the runner.
 //
-//   bunx bend-falsify <spec.ts> [--each]
+//   bunx bend-falsify <spec.ts|spec.json> [--each]
+//   bunx bend-falsify mutants [dir]      run <dir>/mutants.json (default: .)
 //
 // <spec.ts> default-exports { imports, instances }:
 //
@@ -25,17 +26,29 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { type Mutant, runMutants } from "./mutants.ts";
 
 interface Spec {
   imports: string[];
   instances: { name: string; claim: string }[];
 }
 
+const USAGE = "usage: bend-falsify <spec.ts|spec.json> [--each]\n       bend-falsify mutants [dir]   (reads <dir>/mutants.json)";
 const [specPath, flag] = process.argv.slice(2);
 if (!specPath) {
-  console.error("usage: bend-falsify <spec.ts> [--each]");
+  console.error(USAGE);
   process.exit(2);
 }
+// The mutant table as data: a project with no TypeScript of its own keeps
+// mutants.json beside core.bend, and needs Bun but no package.json.
+if (specPath === "mutants") {
+  const dir = resolve(flag ?? ".");
+  const table: Mutant[] = (await import(join(dir, "mutants.json"))).default;
+  if (!Array.isArray(table)) { console.error(`${join(dir, "mutants.json")}: expected an array of mutants`); process.exit(2); }
+  runMutants(dir, table);
+  process.exit(0);
+}
+// A .ts spec is run (it may compute its instances); a .json one is read.
 const spec: Spec = (await import(resolve(specPath))).default;
 const base = dirname(resolve(specPath));
 // "./core.bend as C" -> "import /abs/core.bend as C": the scratch file lives elsewhere.

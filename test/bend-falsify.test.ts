@@ -66,3 +66,15 @@ test("falsify: a counterexample is named, alone and with --each", () => {
   expect(each.out).toContain("1 of 2 instances fail");
   expect(each.code).toBe(1);
 });
+
+test("cli: mutants [dir] runs <dir>/mutants.json", () => {
+  const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/group/proj`);
+  expect(r.out).toContain("PASS: all 2 mutants");
+  expect(r.code).toBe(0);
+});
+
+test("cli: a spec may be JSON", () => {
+  const r = run("../src/falsify.ts", `${import.meta.dir}/spec_bad.json`);
+  expect(r.out).toContain("COUNTEREXAMPLE wrong");
+  expect(r.code).toBe(1);
+});
