@@ -99,6 +99,26 @@ export function sections(text: string): { head: string; secs: [string, string][]
   return { head: parts[0], secs };
 }
 
+// Where PROOF.bend declares a def: the header of its section, "" for the head
+// (before the first header), or undefined when no section declares it (a
+// law's proof def such as LAWS.x, which the checker names after LAWS.bend).
+export function sectionOf(text: string, def: string): string | undefined {
+  const { head, secs } = sections(text);
+  const declares = (body: string): boolean =>
+    new RegExp(`^def ${def.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.])`, "m").test(body);
+  if (declares(head)) return "";
+  return secs.find(([, b]) => declares(b))?.[0];
+}
+
+// A failsIn in shared code -- the head, or a section every run keeps because
+// its header says "tools" -- does not tell one law's mutant from another's:
+// any mutation that breaks that lemma fails there. The run still passes such a
+// row, and says so on its line.
+export function failsInShared(text: string, def: string): boolean {
+  const sec = sectionOf(text, def);
+  return sec === "" || (sec !== undefined && sec.includes("tools"));
+}
+
 // The section headers a file repeats, with every line each one sits on. Two
 // sections under one name are kept together -- their text is concatenated --
 // so the proof breaks somewhere that names neither; the run refuses them by
@@ -568,7 +588,8 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
       continue;
     }
-    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}`);
+    const shared = failsInShared(proof, m.failsIn) ? "  (fails in a shared lemma, not the law's own section)" : "";
+    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}${shared}`);
   }
   if (bad > 0) {
     console.log(`FAIL: ${bad} of ${mutants.length} mutants did not break the proof they target`);

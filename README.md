@@ -288,6 +288,18 @@ the first name is the truth.
 
 ---
 
+
+**A `failsIn` in shared code is weak.** If the def the proof breaks in is
+declared in PROOF.bend's head or in a section whose header contains `tools`,
+every run keeps it, so *any* mutation that breaks that lemma fails there: the
+check no longer tells this law's mutant from another's. The run still passes
+such a row, and its line ends with
+`(fails in a shared lemma, not the law's own section)` so the gap is visible.
+Prefer a mutation whose proof breaks in the law's own section (`LAWS.<law>`, or
+a def declared under its header). Sometimes none exists -- a law that follows
+from its premises through a shared lemma can only be broken there -- and the
+note is then the honest record of it.
+
 ## 4. LAWS.bend
 
 `LAWS.bend` holds the laws, and may hold anything else your proofs read.
