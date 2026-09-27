@@ -67,6 +67,9 @@ function run(file: string, text: string): string {
   if (r.exitedDueToTimeout) { console.log(`TIMEOUT: the checker ran past 5 s: a problem to fix, not a limit to raise`); process.exit(1); }
   return r.stdout.toString() + r.stderr.toString();
 }
+// A clean verdict: "All terms check" up to bend 2.0.31, "ALL PROOFS CHECK" from 2.0.32.
+const clean = (out: string) => out.includes("All terms check") || /^ALL PROOFS CHECK$/m.test(out);
+
 function report(out: string): string {
   const pick = (k: string) => out.match(new RegExp(`^- ${k}\\s*: (.*)$`, "m"))?.[1] ?? "?";
   return `expected ${pick("expected")} / observed ${pick("observed")}`;
@@ -77,7 +80,7 @@ try {
   if (flag !== "--each") {
     const out = run("all.bend", `${head}\n\n${body(spec.instances)}\n`);
     const ms = Math.round(performance.now() - t0);
-    if (out.includes("All terms check")) {
+    if (clean(out)) {
       console.log(`holds on all ${spec.instances.length} instances (${ms} ms)`);
     } else {
       const loc = out.match(/^Location: (\S+)/m)?.[1];
@@ -104,7 +107,7 @@ try {
         const out = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
         await p.exited;
         if (p.signalCode) bad.push(`${x.name}: TIMEOUT, the checker ran past 5 s: a problem to fix, not a limit to raise\n  claim: ${x.claim}`);
-        else if (!out.includes("All terms check")) bad.push(`${x.name}: ${report(out)}\n  claim: ${x.claim}`);
+        else if (!clean(out)) bad.push(`${x.name}: ${report(out)}\n  claim: ${x.claim}`);
         done++;
         if (done % step === 0) console.error(`  ${done}/${spec.instances.length} checked, ${bad.length} failing`);
       }
