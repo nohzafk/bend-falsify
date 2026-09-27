@@ -31,7 +31,7 @@ BEND_NO_TELEMETRY=1
 export BEND_NO_TELEMETRY
 
 echo "== 1. the fixture =="
-(cd test/tree/group/proj && bend PROOF.bend | grep -Eq "^(All terms check\.|ALL PROOFS CHECK)$") || { echo "FAIL: the fixture does not check"; exit 1; }
+(cd test/tree/group/proj && bend PROOF.bend | grep -Eq "^ALL PROOFS CHECK$") || { echo "FAIL: the fixture does not check"; exit 1; }
 echo "  checks"
 
 echo "== 2. the tests =="
@@ -47,7 +47,7 @@ echo "== 3. the example =="
 # one of them Bool-valued -- four mutants, one of them proved `with` another,
 # and a spec. Its spec and its table both run here, so the README cannot
 # describe a file that does not work.
-(cd examples/plus0 && bend PROOF.bend | grep -Eq "^(All terms check\.|ALL PROOFS CHECK)$") || { echo "FAIL: the example does not check"; exit 1; }
+(cd examples/plus0 && bend PROOF.bend | grep -Eq "^ALL PROOFS CHECK$") || { echo "FAIL: the example does not check"; exit 1; }
 bun src/falsify.ts examples/plus0/spec.json | grep -q "holds on all 3 instances" || { echo "FAIL: the example's spec"; exit 1; }
 bun src/falsify.ts mutants examples/plus0 | grep -q "PASS: all 4 mutants" || { echo "FAIL: the example's mutant table"; exit 1; }
 

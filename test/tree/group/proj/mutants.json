@@ -6,7 +6,7 @@
     "to": "  Nat.mul(n, 3n)",
     "why": "double triples",
     "at": { "n": "1n" },
-    "failsIn": "LAWS.double_adds"
+    "failsIn": "Laws.double_adds"
   },
   {
     "law": "keep_same",
@@ -16,7 +16,7 @@
     "nth": 1,
     "why": "keep adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.keep_same"
+    "failsIn": "Laws.keep_same"
   },
   {
     "law": "shift_same",
@@ -25,7 +25,7 @@
     "to": "  Nat.add(n, 2n)",
     "why": "the step adds two",
     "at": { "n": "1n" },
-    "failsIn": "LAWS.shift_same"
+    "failsIn": "Laws.shift_same"
   },
   {
     "law": "keep2_when_keep",
@@ -35,7 +35,7 @@
     "nth": 2,
     "why": "keep2 adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.keep2_when_keep"
+    "failsIn": "Laws.keep2_when_keep"
   },
   {
     "law": "answer_zero_under_gate",
@@ -44,6 +44,6 @@
     "to": "      True{}",
     "why": "the gate admits every value, and the answer is 1n above 0n",
     "at": { "n": "1n" },
-    "failsIn": "LAWS.answer_zero_under_gate"
+    "failsIn": "Laws.answer_zero_under_gate"
   }
 ]

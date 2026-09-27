@@ -219,8 +219,8 @@ def Laws.plus0_same(n):
   {==}
 ```
 
-- The proof def is `def Laws.<law>`, using the alias `LAWS.bend` is imported
-  as.
+- The proof def is `def Laws.<law>`. The checker reports its location as
+  `Laws.<law>`, the def name written in `PROOF.bend`.
 - **A run keeps only the tools sections and the section the mutant names**,
   and it rewrites `LAWS.bend` so that only the named laws' `law` blocks
   survive.
@@ -249,12 +249,11 @@ carries `"with": ["plus0 adds nothing"]`.
 The checker prints a failing def as
 
 ```
-Location: LAWS.plus0_twice_same
+Location: Laws.plus0_twice_same
 ```
 
-`failsIn` is that string, exactly. The checker names a def after the **file** it
-declares it in, so the alias the proof is written with is not the name it
-reports. Side by side, the same proof:
+`failsIn` is that string, exactly. The checker reports the def name as written in `PROOF.bend`. The alias is part
+of that name. Side by side, the same proof:
 
 ```bend
 # PROOF.bend -- the def, written with the alias LAWS.bend is imported as
@@ -267,23 +266,23 @@ def Laws.plus0_same(n):
 
 ```
 # what the checker prints when that proof breaks
-Location: LAWS.plus0_same
+Location: Laws.plus0_same
 ```
 
 ```jsonc
-// the mutant's field: the file's stem, not the alias
-"failsIn": "LAWS.plus0_same"
+// the mutant's field: the def name reported by the checker
+"failsIn": "Laws.plus0_same"
 ```
 
 So:
 
-- a law `plus0_twice_same` in `LAWS.bend` is `LAWS.plus0_twice_same` — the
-  usual case, because every law's proof def is `def Laws.<law>`;
+- a law `plus0_twice_same` is `Laws.plus0_twice_same` when its proof def is
+  `def Laws.plus0_twice_same`;
 - a helper def declared at the top level of `PROOF.bend` and called `plain_def`
   is `plain_def`.
 
 You do not have to guess it. Put a wrong `failsIn` in and read the message:
-`failed in LAWS.plus0_same, not LAWS.plus0_slow_same, when plus0 adds one` —
+`failed in Laws.plus0_same, not Laws.plus0_slow_same, when plus0 adds one` —
 the first name is the truth.
 
 ---
@@ -373,7 +372,7 @@ and the fallback.
     "nth": 1,
     "why": "plus0 adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_same"
+    "failsIn": "Laws.plus0_same"
   }
 ]
 ```
@@ -432,7 +431,7 @@ unmutated, and the proof breaks in `failsIn`. The mutant's line says the check
 was vacuous:
 
 ```
-  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in LAWS.answer_zero_under_gate  (premise false on the core)
+  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in Laws.answer_zero_under_gate  (premise false on the core)
 ```
 
 That row is the fixture's (`test/tree/group/proj`), which `sh test.sh` runs
@@ -453,19 +452,19 @@ A mutant with neither `at` nor `counter` is refused before any check runs:
 Checks 1 to 5 print one line per mutant as they run:
 
 ```
-  plus0_same                 PASS  false when plus0 adds one; fails in LAWS.plus0_same
+  plus0_same                 PASS  false when plus0 adds one; fails in Laws.plus0_same
 ```
 
 A mutant whose counterexample is written by hand says so on its line:
 
 ```
-  shift_same                 PASS  false when the step adds two; fails in LAWS.shift_same  (counter not tied to the law)
+  shift_same                 PASS  false when the step adds two; fails in Laws.shift_same  (counter not tied to the law)
 ```
 
 and one whose check 1 was vacuous says that:
 
 ```
-  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in LAWS.answer_zero_under_gate  (premise false on the core)
+  answer_zero_under_gate     PASS  false when the gate admits every value, and the answer is 1n above 0n; fails in Laws.answer_zero_under_gate  (premise false on the core)
 ```
 
 and the run ends with
@@ -694,7 +693,7 @@ const MUTANTS: Mutant[] = [
     from: "  Nat.add(n, 0n)", to: "  Nat.add(n, 1n)", nth: 1,
     why: "plus0 adds one",
     at: { n: "0n" },
-    failsIn: "LAWS.plus0_same" },
+    failsIn: "Laws.plus0_same" },
 ];
 runMutants(import.meta.dir, MUTANTS);
 ```

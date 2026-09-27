@@ -101,7 +101,7 @@ export function sections(text: string): { head: string; secs: [string, string][]
 
 // Where PROOF.bend declares a def: the header of its section, "" for the head
 // (before the first header), or undefined when no section declares it (a
-// law's proof def such as LAWS.x, which the checker names after LAWS.bend).
+// law's proof def such as Laws.x, named as written in PROOF.bend).
 export function sectionOf(text: string, def: string): string | undefined {
   const { head, secs } = sections(text);
   const declares = (body: string): boolean =>
@@ -419,9 +419,6 @@ function inside(root: string, p: string): boolean {
 }
 
 export function runMutants(projectDir: string, mutants: Mutant[]): void {
-  const lawsAlias = readFileSync(join(projectDir, "PROOF.bend"), "utf8").match(/^import \.\/LAWS\.bend as (\S+)/m)?.[1];
-  const lawsName = (loc: string): string =>
-    lawsAlias !== undefined && loc.startsWith(`${lawsAlias}.`) ? `LAWS.${loc.slice(lawsAlias.length + 1)}` : loc;
   const core = readFileSync(join(projectDir, "core.bend"), "utf8");
   const laws = readFileSync(join(projectDir, "LAWS.bend"), "utf8");
   const proof = readFileSync(join(projectDir, "PROOF.bend"), "utf8");
@@ -458,9 +455,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     process.exit(1);
   }
 
-  // A clean verdict: "All terms check." up to bend 2.0.31, "ALL PROOFS CHECK"
-  // from 2.0.32 (which also refuses unsafe code with exit 1).
-  const clean = (out: string) => out.includes("All terms check.") || /^ALL PROOFS CHECK$/m.test(out);
+  const clean = (out: string) => /^ALL PROOFS CHECK$/m.test(out);
 
   function bend(dir: string, file: string, checkOnly: boolean): { ok: boolean; location: string } {
     const r = Bun.spawnSync(["bend", file, ...(checkOnly ? ["--check-only"] : [])], { cwd: dir, timeout: LIMIT_MS });
@@ -591,9 +586,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       fail(`still checks when ${m.why}`);
       continue;
     }
-    // A law's proof def is named LAWS.x up to bend 2.0.31 and by PROOF.bend's
-    // alias for LAWS.bend from 2.0.32 (`Laws.x`); a row may be written either way.
-    if (lawsName(mutant.location) !== lawsName(m.failsIn)) {
+    if (mutant.location !== m.failsIn) {
       fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
       continue;
     }

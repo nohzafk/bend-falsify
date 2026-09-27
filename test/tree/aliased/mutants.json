@@ -6,7 +6,7 @@
     "to": "  Nat.add(n, 1n)",
     "why": "plus0 adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_same"
+    "failsIn": "Laws.plus0_same"
   },
   {
     "law": "plus0_same",
@@ -15,6 +15,6 @@
     "to": "  Nat.add(n, 2n)",
     "why": "plus0 adds two",
     "counter": "{C.plus0(0n) == 0n : Nat}",
-    "failsIn": "LAWS.plus0_same"
+    "failsIn": "Laws.plus0_same"
   }
 ]

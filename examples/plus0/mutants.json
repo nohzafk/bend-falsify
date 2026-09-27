@@ -7,7 +7,7 @@
     "nth": 1,
     "why": "plus0 adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_same"
+    "failsIn": "Laws.plus0_same"
   },
   {
     "law": "plus0_slow_same",
@@ -17,7 +17,7 @@
     "nth": 2,
     "why": "the other spelling adds two",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_slow_same"
+    "failsIn": "Laws.plus0_slow_same"
   },
   {
     "law": "plus0_twice_same",
@@ -26,7 +26,7 @@
     "to": "  plus0(Nat.add(n, 1n))",
     "why": "the first of the two steps adds one",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_twice_same",
+    "failsIn": "Laws.plus0_twice_same",
     "with": [
       "plus0 adds nothing"
     ]
@@ -39,6 +39,6 @@
     "nth": 1,
     "why": "plus0 adds one, so the two spellings stop agreeing",
     "at": { "n": "0n" },
-    "failsIn": "LAWS.plus0_agree"
+    "failsIn": "Laws.plus0_agree"
   }
 ]

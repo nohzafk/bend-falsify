@@ -67,8 +67,7 @@ function run(file: string, text: string): string {
   if (r.exitedDueToTimeout) { console.log(`TIMEOUT: the checker ran past 5 s: a problem to fix, not a limit to raise`); process.exit(1); }
   return r.stdout.toString() + r.stderr.toString();
 }
-// A clean verdict: "All terms check" up to bend 2.0.31, "ALL PROOFS CHECK" from 2.0.32.
-const clean = (out: string) => out.includes("All terms check") || /^ALL PROOFS CHECK$/m.test(out);
+const clean = (out: string) => /^ALL PROOFS CHECK$/m.test(out);
 
 function report(out: string): string {
   const pick = (k: string) => out.match(new RegExp(`^- ${k}\\s*: (.*)$`, "m"))?.[1] ?? "?";

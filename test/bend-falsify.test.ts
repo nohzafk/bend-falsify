@@ -183,7 +183,7 @@ test("two sections under one header are refused by name and line", () => {
 for (const [i, says] of [
   [0, "false on the core itself"],
   [1, "still holds on the mutant"],
-  [2, "not LAWS.keep_same"],
+  [2, "not Laws.keep_same"],
   [3, 'no counterexample: give "at"'],
   [4, "occurs 2 times"],
   [5, 'at gives no value for the binder "n"'],
