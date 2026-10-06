@@ -131,10 +131,12 @@ export function duplicateSections(text: string): { header: string; lines: number
   return [...seen].map(([header, lines]) => ({ header, lines })).filter((d) => d.lines.length > 1);
 }
 
-// LAWS.bend with every law but the kept ones removed; its defs stay.
+// LAWS.bend with every law but the kept ones removed; its types, defs and
+// imports stay. A block runs from one top-level form to the next, so each form
+// that may follow a law has to start a block of its own.
 export function onlyLaws(text: string, keep: string[]): string {
   return text
-    .split(/^(?=law |# ---- |def )/m)
+    .split(/^(?=law |# ---- |def |type |import )/m)
     .filter((b) => !b.startsWith("law ") || keep.some((k) => b.startsWith(`law ${k}:`)))
     .join("");
 }
