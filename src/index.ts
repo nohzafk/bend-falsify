@@ -1,1 +1,1 @@
-export { type Mutant, runMutants } from "./mutants.ts";
+export { type Mutant, type MutantRunOptions, runMutants, runMutantsAsync } from "./mutants.ts";

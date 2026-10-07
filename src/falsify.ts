@@ -26,14 +26,14 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { type Mutant, runMutants } from "./mutants.ts";
+import { type Mutant, runMutants, runMutantsAsync } from "./mutants.ts";
 
 interface Spec {
   imports: string[];
   instances: { name: string; claim: string }[];
 }
 
-const USAGE = "usage: bend-falsify <spec.ts|spec.json> [--each]\n       bend-falsify mutants [dir]   (reads <dir>/mutants.json)";
+const USAGE = "usage: bend-falsify <spec.ts|spec.json> [--each]\n       bend-falsify mutants [dir] [--jobs N]   (reads <dir>/mutants.json)";
 const [specPath, flag] = process.argv.slice(2);
 if (!specPath) {
   console.error(USAGE);
@@ -42,11 +42,49 @@ if (!specPath) {
 // The mutant table as data: a project with no TypeScript of its own keeps
 // mutants.json beside core.bend, and needs Bun but no package.json.
 if (specPath === "mutants") {
-  const dir = resolve(flag ?? ".");
+  const args = process.argv.slice(3);
+  let project = args[0] ?? ".";
+  let jobs: number | undefined;
+  // Without --jobs, the arguments read exactly as before: the first is the
+  // directory, and anything after it is ignored. --jobs opts into strict parsing.
+  if (args.includes("--jobs")) {
+    project = ".";
+    let hasProject = false;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--jobs" && jobs === undefined) {
+        const value = args[++i];
+        jobs = value !== undefined && /^\d+$/.test(value) ? Number(value) : NaN;
+        if (!Number.isInteger(jobs) || jobs < 1) {
+          console.error("--jobs must be a positive integer"); process.exit(2);
+        }
+      } else if (!args[i].startsWith("-") && !hasProject) {
+        project = args[i]; hasProject = true;
+      } else { console.error(USAGE); process.exit(2); }
+    }
+  }
+  const dir = resolve(project);
   const table: Mutant[] = (await import(join(dir, "mutants.json"))).default;
   if (!Array.isArray(table)) { console.error(`${join(dir, "mutants.json")}: expected an array of mutants`); process.exit(2); }
-  runMutants(dir, table);
-  process.exit(0);
+  if (jobs === undefined) {
+    runMutants(dir, table);
+  } else {
+    const controller = new AbortController();
+    let signalExit: number | undefined;
+    const interrupt = () => { signalExit = 130; controller.abort(new Error("mutant run interrupted by SIGINT")); };
+    const terminate = () => { signalExit = 143; controller.abort(new Error("mutant run interrupted by SIGTERM")); };
+    process.on("SIGINT", interrupt);
+    process.on("SIGTERM", terminate);
+    try {
+      await runMutantsAsync(dir, table, { jobs, signal: controller.signal });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = signalExit ?? 1;
+    } finally {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
+    }
+  }
+  process.exit(process.exitCode ?? 0);
 }
 // A .ts spec is run (it may compute its instances); a .json one is read.
 const spec: Spec = (await import(resolve(specPath))).default;

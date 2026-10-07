@@ -420,7 +420,7 @@ function inside(root: string, p: string): boolean {
   return r !== "" && !r.startsWith("..") && !isAbsolute(r);
 }
 
-export function runMutants(projectDir: string, mutants: Mutant[]): void {
+function prepareRun(projectDir: string, mutants: Mutant[]) {
   const core = readFileSync(join(projectDir, "core.bend"), "utf8");
   const laws = readFileSync(join(projectDir, "LAWS.bend"), "utf8");
   const proof = readFileSync(join(projectDir, "PROOF.bend"), "utf8");
@@ -446,7 +446,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     for (const d of doubles) {
       console.log(`FAIL: PROOF.bend: duplicate section header ${JSON.stringify(d.header)} (lines ${d.lines.join(", ")}); give each section its own name`);
     }
-    process.exit(1);
+    return undefined;
   }
 
   // Everything the scratch tree needs has to be there before the first check:
@@ -454,21 +454,13 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const gone = missingImports(projectDir, sites);
   if (gone.length > 0) {
     for (const g of gone) console.log(`FAIL: ${g.file}: import ${g.rel} does not exist: ${g.abs}`);
-    process.exit(1);
+    return undefined;
   }
 
-  const clean = (out: string) => /^ALL PROOFS CHECK$/m.test(out);
-
-  function bend(dir: string, file: string, checkOnly: boolean): { ok: boolean; location: string } {
-    const r = Bun.spawnSync(["bend", file, ...(checkOnly ? ["--check-only"] : [])], { cwd: dir, timeout: LIMIT_MS });
-    if (r.exitedDueToTimeout) throw new Error(`${file}: the checker ran past ${LIMIT_MS / 1000} s: a problem to fix, not a limit to raise`);
-    const out = r.stdout.toString() + r.stderr.toString();
-    return { ok: clean(out), location: out.match(/^Location: (\S+)/m)?.[1] ?? "?" };
-  }
-
-  // Build the scratch tree for one run, call `f` in the project's copy, and
-  // remove the tree whatever happens.
-  function inScratch<T>(coreText: string, f: (dir: string) => T, lawsText = laws, proofText = proof): T {
+  // Build the scratch tree for one check and return the project's copy with
+  // the function that removes the tree; the caller removes it whatever happens.
+  function scratch(request: CheckRequest): { dir: string; remove: () => void } {
+    const { coreText, lawsText = laws, proofText = proof } = request;
     const root = mkdtempSync(join(tmpdir(), "bend-mutant-"));
     try {
       const dir = placeProject(root, projectDir, depth);
@@ -485,9 +477,11 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       writeFileSync(join(dir, "core.bend"), coreText);
       writeFileSync(join(dir, "LAWS.bend"), lawsText);
       writeFileSync(join(dir, "PROOF.bend"), proofText);
-      return f(dir);
-    } finally {
+      if (request.instance !== undefined) writeFileSync(join(dir, "INSTANCE.bend"), request.instance);
+      return { dir, remove: () => rmSync(root, { recursive: true, force: true }) };
+    } catch (error) {
       rmSync(root, { recursive: true, force: true });
+      throw error;
     }
   }
 
@@ -495,41 +489,35 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   // it holds exactly when both sides reduce to the same term. `file` is the
   // instance file's head and the name the instance is appended as: the two
   // namespaces above differ in nothing else.
-  function checkClaim(coreText: string, claim: string, file: { head: string; def: string }): { ok: boolean; location: string } {
-    return inScratch(coreText, (dir) => {
-      writeFileSync(join(dir, "INSTANCE.bend"), `${file.head}\n\ndef ${file.def}() -> ${claim}:\n  {==}\n`);
-      return bend(dir, "INSTANCE.bend", true);
-    });
+  function checkClaim(coreText: string, claim: string, file: { head: string; def: string }): CheckRequest {
+    return { coreText, file: "INSTANCE.bend", checkOnly: true,
+      instance: `${file.head}\n\ndef ${file.def}() -> ${claim}:\n  {==}\n` };
   }
 
-  function proofChecks(coreText: string, m: Mutant, withLaws: [string, string][]): { ok: boolean; location: string } {
+  function proofChecks(coreText: string, m: Mutant, withLaws: [string, string][]): CheckRequest {
     const { head, secs } = sections(proof);
     const wanted = [m.section, ...withLaws.map(([, sec]) => sec)].map((x) => `# ---- ${x} ----`);
     const kept = secs.filter(([h]) => h.includes("tools") || wanted.includes(h));
     if (!kept.some(([h]) => h === `# ---- ${m.section} ----`)) {
       throw new Error(`${m.law}: no section "${m.section}" in PROOF.bend`);
     }
-    return inScratch(coreText, (dir) => bend(dir, "PROOF.bend", false),
-      onlyLaws(laws, [m.law, ...withLaws.map(([law]) => law)]),
-      head + kept.map(([h, b]) => h + b).join(""));
+    return { coreText, file: "PROOF.bend", checkOnly: false,
+      lawsText: onlyLaws(laws, [m.law, ...withLaws.map(([law]) => law)]),
+      proofText: head + kept.map(([h, b]) => h + b).join("") };
   }
 
-  let bad = 0;
   // A section named in `with` is kept with the law whose section it is.
   const lawOf = (sec: string): [string, string] => {
     const owner = mutants.find((x) => x.section === sec);
     if (!owner) throw new Error(`no mutant has the section "${sec}", so its law is unknown`);
     return [owner.law, sec];
   };
-  for (const m of mutants) {
+  function* row(m: Mutant): Generator<CheckRequest, RowResult, CheckResult> {
     const name = m.law.padEnd(26);
     // A counter written by hand is not read from the law: every line about it
     // says so, or the gap goes unnoticed.
     const loose = m.counter !== undefined && m.at === undefined ? "  (counter not tied to the law)" : "";
-    const fail = (msg: string): void => {
-      console.log(`  ${name} FAIL  ${msg}${loose}`);
-      bad += 1;
-    };
+    const fail = (msg: string): RowResult => ({ line: `  ${name} FAIL  ${msg}${loose}`, bad: true });
 
     let claim: string;
     let premises: Instance["premises"] = [];
@@ -541,22 +529,19 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
         claim = inst.claim;
         premises = inst.premises;
       } catch (e) {
-        fail((e as Error).message);
-        continue;
+        return fail((e as Error).message);
       }
     } else if (m.counter) {
       claim = m.counter;
     } else {
-      fail(`no counterexample: give "at" with a value for each of the law's binders, or "counter" with a claim of your own`);
-      continue;
+      return fail(`no counterexample: give "at" with a value for each of the law's binders, or "counter" with a claim of your own`);
     }
 
     let mutated: string;
     try {
       mutated = mutate(core, m.from, m.to, m.law, m.nth);
     } catch (e) {
-      fail((e as Error).message);
-      continue;
+      return fail((e as Error).message);
     }
     const withLaws = (m.with ?? []).map(lawOf);
 
@@ -564,40 +549,175 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
     // premise is false, so a mutant that makes the premise false on the core
     // leaves nothing for the claim to hold against. Checks 2 to 5 still run,
     // so the row stays a checked claim. A `counter` carries no premise.
-    const falseOnCore = premises.find((p) => !checkClaim(core, p.equation, file).ok);
-    if (falseOnCore === undefined && !checkClaim(core, claim, file).ok) {
-      fail(`the counterexample is false on the core itself: ${claim}`);
-      continue;
+    let falseOnCore: Instance["premises"][number] | undefined;
+    for (const p of premises) {
+      if (!(yield checkClaim(core, p.equation, file)).ok) { falseOnCore = p; break; }
     }
-    const falsePremise = premises.find((p) => !checkClaim(mutated, p.equation, file).ok);
+    if (falseOnCore === undefined && !(yield checkClaim(core, claim, file)).ok) {
+      return fail(`the counterexample is false on the core itself: ${claim}`);
+    }
+    let falsePremise: Instance["premises"][number] | undefined;
+    for (const p of premises) {
+      if (!(yield checkClaim(mutated, p.equation, file)).ok) { falsePremise = p; break; }
+    }
     if (falsePremise) {
-      fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
-      continue;
+      return fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
     }
-    if (checkClaim(mutated, claim, file).ok) {
-      fail(`the counterexample still holds on the mutant, so the law is not shown false: ${claim}`);
-      continue;
+    if ((yield checkClaim(mutated, claim, file)).ok) {
+      return fail(`the counterexample still holds on the mutant, so the law is not shown false: ${claim}`);
     }
-    const control = proofChecks(core, m, withLaws);
+    const control = yield proofChecks(core, m, withLaws);
     if (!control.ok) {
-      fail(`the proof does not check even unmutated (${control.location})`);
-      continue;
+      return fail(`the proof does not check even unmutated (${control.location})`);
     }
-    const mutant = proofChecks(mutated, m, withLaws);
+    const mutant = yield proofChecks(mutated, m, withLaws);
     if (mutant.ok) {
-      fail(`still checks when ${m.why}`);
-      continue;
+      return fail(`still checks when ${m.why}`);
     }
     if (mutant.location !== m.failsIn) {
-      fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
-      continue;
+      return fail(`failed in ${mutant.location}, not ${m.failsIn}, when ${m.why}`);
     }
     const shared = failsInShared(proof, m.failsIn) ? "  (fails in a shared lemma, not the law's own section)" : "";
-    console.log(`  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}${shared}`);
+    return { line: `  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}${shared}`, bad: false };
   }
-  if (bad > 0) {
-    console.log(`FAIL: ${bad} of ${mutants.length} mutants did not break the proof they target`);
-    process.exit(1);
+  return { row, scratch };
+}
+
+interface CheckRequest {
+  coreText: string;
+  file: string;
+  checkOnly: boolean;
+  instance?: string;
+  lawsText?: string;
+  proofText?: string;
+}
+interface CheckResult { ok: boolean; location: string }
+interface RowResult { line: string; bad: boolean }
+
+function verdict(out: string): CheckResult {
+  return { ok: /^ALL PROOFS CHECK$/m.test(out), location: out.match(/^Location: (\S+)/m)?.[1] ?? "?" };
+}
+function timeoutError(file: string): Error {
+  return new Error(`${file}: the checker ran past ${LIMIT_MS / 1000} s: a problem to fix, not a limit to raise`);
+}
+function summary(bad: number, count: number): void {
+  console.log(bad > 0
+    ? `FAIL: ${bad} of ${count} mutants did not break the proof they target`
+    : `PASS: all ${count} mutants are false laws, and break the proof they target`);
+}
+
+// The synchronous API retains its exit-on-failure contract.
+export function runMutants(projectDir: string, mutants: Mutant[]): void {
+  const run = prepareRun(projectDir, mutants);
+  if (!run) process.exit(1);
+  let bad = 0;
+  for (const m of mutants) {
+    const row = run.row(m);
+    let step = row.next();
+    while (!step.done) {
+      const request = step.value;
+      const scratch = run.scratch(request);
+      let result: CheckResult;
+      try {
+        const r = Bun.spawnSync(["bend", request.file, ...(request.checkOnly ? ["--check-only"] : [])], { cwd: scratch.dir, timeout: LIMIT_MS });
+        if (r.exitedDueToTimeout) throw timeoutError(request.file);
+        result = verdict(r.stdout.toString() + r.stderr.toString());
+      } finally {
+        scratch.remove();
+      }
+      step = row.next(result);
+    }
+    console.log(step.value.line);
+    if (step.value.bad) bad++;
   }
-  console.log(`PASS: all ${mutants.length} mutants are false laws, and break the proof they target`);
+  summary(bad, mutants.length);
+  if (bad > 0) process.exit(1);
+}
+
+export interface MutantRunOptions {
+  jobs?: number;
+  signal?: AbortSignal;
+}
+
+// A worker owns an entire row. Checks within it never overlap; each check
+// owns fresh scratch until its child has exited and its output is drained.
+// Semantic failures set exitCode after every row completes. Operational
+// errors reject only after all workers have stopped and removed scratch.
+export async function runMutantsAsync(projectDir: string, mutants: Mutant[], options: MutantRunOptions = {}): Promise<void> {
+  const jobs = options.jobs ?? 1;
+  if (!Number.isInteger(jobs) || jobs < 1) throw new Error("jobs must be a positive integer");
+  options.signal?.throwIfAborted();
+  const run = prepareRun(projectDir, mutants);
+  if (!run) { process.exitCode = 1; return; }
+  const controller = new AbortController();
+  const cancel = () => controller.abort(options.signal?.reason);
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  let next = 0;
+  let printed = 0;
+  let bad = 0;
+  const results: (RowResult | undefined)[] = new Array(mutants.length);
+
+  async function check(request: CheckRequest): Promise<CheckResult> {
+    controller.signal.throwIfAborted();
+    const scratch = run!.scratch(request);
+    let child: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const stop = () => { child?.kill("SIGKILL"); };
+    try {
+      child = Bun.spawn(["bend", request.file, ...(request.checkOnly ? ["--check-only"] : [])], {
+        cwd: scratch.dir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      controller.signal.addEventListener("abort", stop, { once: true });
+      timer = setTimeout(() => { timedOut = true; stop(); }, LIMIT_MS);
+      const [out, err] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      if (timedOut) throw timeoutError(request.file);
+      controller.signal.throwIfAborted();
+      if (child.signalCode) throw new Error(`${request.file}: checker stopped by ${child.signalCode}`);
+      return verdict(out + err);
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.signal.removeEventListener("abort", stop);
+      try {
+        if (child) { child.kill("SIGKILL"); await child.exited; }
+      } finally {
+        scratch.remove();
+      }
+    }
+  }
+
+  async function worker(): Promise<void> {
+    try {
+      for (let i = next++; i < mutants.length; i = next++) {
+        controller.signal.throwIfAborted();
+        const row = run!.row(mutants[i]);
+        let step = row.next();
+        while (!step.done) step = row.next(await check(step.value));
+        results[i] = step.value;
+        // Only a completed prefix may print: a faster later row cannot
+        // reorder output, including rows that need no checker at all.
+        while (results[printed] !== undefined) {
+          const result = results[printed++]!;
+          console.log(result.line);
+          if (result.bad) bad++;
+        }
+      }
+    } catch (error) {
+      controller.abort(error);
+      throw error;
+    }
+  }
+  try {
+    await Promise.allSettled(Array.from({ length: Math.min(jobs, mutants.length) }, worker));
+    controller.signal.throwIfAborted();
+    summary(bad, mutants.length);
+    if (bad > 0) process.exitCode = 1;
+  } finally {
+    options.signal?.removeEventListener("abort", cancel);
+  }
 }

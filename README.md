@@ -679,7 +679,8 @@ The same table, two ways to write it.
 bunx bend-falsify mutants .          # or: bunx bend-falsify mutants path/to/project
 ```
 
-The tool imports `<dir>/mutants.json` and passes its array to `runMutants`. A
+By default, the tool imports `<dir>/mutants.json` and passes its array to
+`runMutants`. A
 file that is not an array is refused before anything runs:
 `<dir>/mutants.json: expected an array of mutants`, exit 2.
 
@@ -698,7 +699,7 @@ const MUTANTS: Mutant[] = [
 runMutants(import.meta.dir, MUTANTS);
 ```
 
-`runMutants` is what both forms run; the JSON form is a thin reader over it.
+`runMutants` stays synchronous, and the CLI uses it unless `--jobs` is given.
 Take the JSON form when the project has no TypeScript of its own. Take the TS
 form when the table should be typed, generated, or share constants with the
 rest of the project — and when the project is already a TS project, so the
@@ -707,6 +708,43 @@ call can sit in its own test script.
 `projectDir` is the directory holding the three Bend files. `import.meta.dir`
 is the directory of the table file, which is right when the table sits beside
 them.
+
+### Opt-in bounded row parallelism
+
+```sh
+bunx bend-falsify mutants path/to/project --jobs 4
+```
+
+```ts
+import { runMutantsAsync } from "bend-falsify";
+
+await runMutantsAsync(import.meta.dir, MUTANTS, { jobs: 4 });
+// Optional cancellation: { jobs: 4, signal: controller.signal }
+```
+
+`runMutantsAsync(projectDir, table, options?)` returns `Promise<void>`.
+`jobs` defaults to **1** and must be a positive integer. Invalid values
+are rejected before reading project files or spawning a checker; invalid CLI
+values exit 2. The CLI accepts `--jobs N` before or after the directory.
+Without the flag, the synchronous API and CLI behavior do not change.
+
+At most `jobs` **rows** run at once. Each row runs its checks in the order in
+§5, with the same short circuits and 5 s per-check timeout. Every check gets
+fresh scratch; there is no cache or persistent checker. Dependencies in
+`with` still resolve against the entire table. Lines and the summary print
+in table order, even if a later row finishes first. Completed lines can wait
+for earlier rows before printing.
+
+A semantic failure does not stop other rows: the async call resolves after
+all rows and sets `process.exitCode = 1`, rather than calling `process.exit`.
+File/import preflight refusals also resolve with failure status. Thrown
+operational errors (including a failed spawn, timeout or signalled checker)
+reject; no success summary is printed. An aborted `signal` rejects with its
+reason. Before rejection, all workers finish teardown: running checker
+children are killed and awaited, then their scratch trees are removed.
+The CLI handles SIGINT and SIGTERM through the same teardown and exits 130
+or 143 respectively. Callers must await the promise, catch operational
+errors, and must not force process exit while work is running.
 
 ---
 
@@ -823,7 +861,7 @@ Every message the tool can print, and what it means.
 
 | message | cause |
 | --- | --- |
-| `usage: bend-falsify <spec.ts\|spec.json> [--each]` and `bend-falsify mutants [dir]   (reads <dir>/mutants.json)` | no argument, exit 2 |
+| `usage: bend-falsify <spec.ts\|spec.json> [--each]` and `bend-falsify mutants [dir] [--jobs N]   (reads <dir>/mutants.json)` | no argument, exit 2 |
 | `<dir>/mutants.json: expected an array of mutants` | the JSON is not an array, exit 2 |
 | `error: Cannot find module '<dir>/mutants.json'` | no table at that path |
 | `error: Executable not found in $PATH: "bend"` | `bend` is not on `PATH` |
