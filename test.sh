@@ -33,6 +33,8 @@ export BEND_NO_TELEMETRY
 echo "== 1. the fixture =="
 (cd test/tree/group/proj && bend PROOF.bend | grep -Eq "^ALL PROOFS CHECK$") || { echo "FAIL: the fixture does not check"; exit 1; }
 echo "  checks"
+(cd test/tree/chain/proj && bend PROOF.bend | grep -Eq "^ALL PROOFS CHECK$") || { echo "FAIL: the chain fixture does not check"; exit 1; }
+echo "  the two-level chain fixture checks"
 
 echo "== 2. the tests =="
 if ! bun test > /tmp/bend-falsify-tests.log 2>&1; then
@@ -79,7 +81,7 @@ echo "== 4. the mutant table's refusals =="
 bun src/falsify.ts mutants test/tree/group/proj > /tmp/bend-falsify-fixture.log 2>&1 || { cat /tmp/bend-falsify-fixture.log; echo "FAIL: the fixture's mutant table"; exit 1; }
 grep -q "PASS: all 5 mutants" /tmp/bend-falsify-fixture.log || { echo "FAIL: the fixture's mutant table"; exit 1; }
 grep -q "(premise false on the core)" /tmp/bend-falsify-fixture.log || { echo "FAIL: a premise-relaxing mutant was not reported as vacuous"; exit 1; }
-echo "  a file import and a directory import are mirrored into the scratch tree"
+echo "  a file import and a directory import resolve from the scratch directory"
 echo "  a premise false on the core is reported, not refused"
 
 # `double` is `Nat.mul(n, 2n)` mutated to `Nat.mul(n, 3n)`, and the two agree at
@@ -147,6 +149,12 @@ sed '/^def Step() -> Type: Nat$/d' "$TMP/named-nodef/LAWS.bend" > "$TMP/l"
 mv "$TMP/l" "$TMP/named-nodef/LAWS.bend"
 bun src/falsify.ts mutants "$TMP/named-nodef" 2>&1 | grep -q "the counterexample is false on the core itself: {C.plus0(0n) == 0n : Step()}" || { echo "FAIL: a claim typed by a def LAWS.bend does not declare was not refused"; exit 1; }
 echo "  strip the def, and the row is refused by the name it cannot resolve"
+
+# A two-level outward import chain (project core -> ../stream/core.bend ->
+# ../keys/core.bend) resolves against the real tree, and leaves nothing behind.
+bun src/falsify.ts mutants test/tree/chain/proj | grep -q "PASS: all 1 mutants" || { echo "FAIL: the two-level import chain"; exit 1; }
+[ -z "$(find test examples -name 'bend_mutant_*' 2>/dev/null)" ] || { echo "FAIL: a scratch directory was left behind"; exit 1; }
+echo "  a two-level chain checks, and no bend_mutant_ directory is left"
 
 echo "== 6. the types =="
 bunx tsc -p .

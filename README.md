@@ -97,46 +97,43 @@ my-project/
 ### Imports
 
 `core.bend`, `LAWS.bend` and `PROOF.bend` may import each other and any other
-file, at any depth. The tool copies the project, and everything it imports
-that lives outside the project, into a scratch tree, then checks there. The
-temporary tree is removed whatever happens.
+file, at any depth. Nothing is copied. For each check the tool writes the three
+files (core with the mutation, LAWS with the other laws removed, PROOF with the
+kept sections) into a scratch directory **inside the project directory**,
+`bend_mutant_<random>/`, under their own names, and rewrites their relative
+imports so they resolve to the real files in the real tree: an import of
+`./core.bend`, `./LAWS.bend` or `./PROOF.bend` stays (the scratch files import
+each other), any other relative import gets one more `../`
+(`./sub/k.bend` becomes `../sub/k.bend`, `../shared.bend` becomes
+`../../shared.bend`). Every other import then resolves against the real tree,
+however many levels deep the chain goes. Parallel rows each get their own
+directory.
 
-The scratch tree keeps the project under **its real ancestors' names**, deep
-enough for the deepest import to resolve:
-
-- `depth` is the largest number of `..` in any one outward import of the three
-  files, and at least 1; `../lib/facts.bend` is depth 1, `../../bend-schema/x`
-  is depth 2.
-- the project is placed `depth` directories below the scratch root. A project
-  at `/home/u/app/lib` with depth 2 is placed at `<root>/app/lib`, so
-  `../../bend-schema` resolves to `<root>/bend-schema`, which is where the
-  copy of it went.
-- if the project path has `depth` parts or fewer, the run stops:
-  `<abs>: imports climb <depth> levels, past the filesystem root`.
+**Add `bend_mutant_*/` to your `.gitignore`.** The directory is removed when
+its check finishes, on a normal exit, on SIGINT and SIGTERM, on an uncaught
+error and on `process.exit`; a run also removes any `bend_mutant_*` directory
+in the project that a crashed run left behind, before it starts. (The
+synchronous API cannot see a signal while a checker runs; the checker, which
+shares the terminal's process group, dies with it, and the run then stops with
+`checker stopped by SIGINT` and cleans up.) The name is plain on purpose: bend
+refuses an import path with a dot or any name that is not letters, digits, `_`
+and `-`.
 
 Rules that follow, and the ones that surprise people:
 
-- **What is copied is what the import names — a file or a directory.** The tool
-  looks for `^import ((?:\.\.\/)+)([^/\s]+)` — `../<name>`, at any depth:
-  - `../<name>/…` copies that directory: `import ../lib/facts.bend as F` copies
-    `../lib`, so the file's neighbours come with it;
-  - `../<name>` with nothing after it copies that file:
-    `import ../shared.bend as S` copies `../shared.bend` and nothing else.
 - **An import that names nothing on disk stops the run before any check**, by
   name and with the file that makes it:
   `FAIL: LAWS.bend: import ../shared.bend does not exist: /lib/shared.bend`. It
-  is not a counter failure, which is what it used to look like from the
-  scratch tree: `the counterexample is false on the core itself`.
-- **The three files' imports are what is mirrored, not their imports'
-  imports.** A shared file that itself reads something beside it is mirrored
-  whole when it is imported as a directory (`../lib/facts.bend`); imported as a
-  file (`../shared.bend`), it arrives alone.
-- **An import that resolves outside the scratch root is refused**, with
-  `import <rel>: would land outside the scratch tree`.
-- `node_modules` and `.git` are never copied.
-
-An import inside the project (`./core.bend`, `./sub/k.bend`) needs nothing
-extra: the project directory is copied whole, with its subdirectories.
+  is not a counter failure, which is what it would look like from the
+  scratch directory: `the counterexample is false on the core itself`.
+- **The original `core.bend` must not be reachable from the three files
+  through other files.** If `PROOF.bend` imports a `FACTS.bend` that imports
+  `./core.bend`, the mutant and the original would be two modules. Before any
+  check the tool walks the import graph from the three files over the real tree
+  (read-only), and refuses the run with the chain:
+  `FAIL: PROOF.bend -> ./FACTS.bend -> ./core.bend: the original core.bend is
+  reachable ...`. Take the dependency on the core out of the shared file.
+- Only plain relative imports (`./x`, `../x`) are rewritten and walked.
 
 ---
 
@@ -741,7 +738,7 @@ File/import preflight refusals also resolve with failure status. Thrown
 operational errors (including a failed spawn, timeout or signalled checker)
 reject; no success summary is printed. An aborted `signal` rejects with its
 reason. Before rejection, all workers finish teardown: running checker
-children are killed and awaited, then their scratch trees are removed.
+children are killed and awaited, then their scratch directories are removed.
 The CLI handles SIGINT and SIGTERM through the same teardown and exits 130
 or 143 respectively. Callers must await the promise, catch operational
 errors, and must not force process exit while work is running.
@@ -792,7 +789,7 @@ export default {
   checks. A directory that is not plain **between the spec and an import it
   names** still fails, with `an import path of plain names (letters, digits, _
   and -; the hub's files import the hub's)`. The mutant path is not affected —
-  its scratch tree is `bend-mutant-XXXXXX`.
+  its scratch directory is `bend_mutant_XXXXXX`, inside the project.
 - Each instance becomes `def <name>() -> <claim>: {==}` in one scratch file.
   The checker runs the code, so an instance closes exactly when the law holds
   at those literals.
@@ -913,8 +910,7 @@ is not printed)
 | `FAIL: PROOF.bend: duplicate section header "# ---- <name> ----" (lines <a>, <b>); give each section its own name` | two `# ---- <name> ----` headers are identical. Both sections would be kept under one name and their text concatenated, so the proof would break somewhere that names neither. Every line the repeated header sits on is listed |
 | `<law>: no section "<section>" in PROOF.bend` | no `# ---- <section> ----` header with that exact text. Usually a header that does not match the format, or a `section` copied from another law |
 | `no mutant has the section "<sec>", so its law is unknown` | a `with` entry that names a section no mutant in the table has. Every name in `with` must be some row's `section` |
-| `import <rel>: would land outside the scratch tree` | an import whose `..` climbs past the scratch root |
-| `<abs>: imports climb <depth> levels, past the filesystem root` | the project is too close to the filesystem root for its imports |
+| `FAIL: <chain>: the original core.bend is reachable ...` | a file the three import, through some chain, imports the project's own `core.bend`. The chain is listed link by link |
 | `<file>: the checker ran past 5 s: a problem to fix, not a limit to raise` | a check that does not finish in 5 s |
 
 ---

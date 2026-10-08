@@ -1,36 +1,42 @@
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, counterImports, duplicateSections, importSites, instanceDefName, instanceHead, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
+import { type Law, counterImports, duplicateSections, instanceDefName, instanceHead, lawInstance, missingImports, mutate, readLaw, reachesCore, relativeImports, rewriteImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
   return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
 };
 
-test("outward imports: a directory, and a file, at any depth", () => {
-  const r = relativeImports(["import Base\nimport ./core.bend as C\nimport ../base-facts/a.bend as A\n", "import ../../bend-schema/core/core.bend as S\nimport ../shared.bend as H\n"]);
-  expect(r.paths.sort()).toEqual(["../../bend-schema", "../base-facts", "../shared.bend"]);
-  expect(r.depth).toBe(2);
-  expect(relativeImports(["import ./core.bend as C\n"]).depth).toBe(1);
+test("relative imports are listed once each", () => {
+  expect(relativeImports("import Base\nimport ./core.bend as C\nimport ../a/b.bend as A\nimport ../a/b.bend as B\n"))
+    .toEqual(["./core.bend", "../a/b.bend"]);
 });
 
-test("an import is kept with the file that makes it", () => {
-  expect(importSites([["core.bend", "import ../shared.bend as S\n"], ["LAWS.bend", "import ../../lib/facts.bend as F\nimport ../shared.bend as S\n"]]))
-    .toEqual([{ file: "core.bend", rel: "../shared.bend" }, { file: "LAWS.bend", rel: "../../lib" }]);
+test("the scratch files' imports: their own names stay, every other relative import goes one level out", () => {
+  expect(rewriteImports("import Base\nimport ./core.bend as C\nimport ./sub/k.bend as K\nimport ../x.bend as X\nimport ../../y/z.bend as Y\n"))
+    .toBe("import Base\nimport ./core.bend as C\nimport ../sub/k.bend as K\nimport ../../x.bend as X\nimport ../../../y/z.bend as Y\n");
 });
 
 test("an import that names nothing on disk is reported, with the file that makes it", () => {
   const dir = import.meta.dir + "/tree/group/proj";
-  const sites = importSites([["core.bend", "import ../shared.bend as S\nimport ../gone.bend as G\n"]]);
-  expect(missingImports(dir, sites)).toEqual([{ file: "core.bend", rel: "../gone.bend", abs: `${import.meta.dir}/tree/group/gone.bend` }]);
+  expect(missingImports(dir, [["core.bend", "import ../shared.bend as S\nimport ../gone.bend as G\n"]]))
+    .toEqual([{ file: "core.bend", rel: "../gone.bend", abs: `${import.meta.dir}/tree/group/gone.bend` }]);
 });
 
-test("the project sits under its real ancestors, deep enough for every import", () => {
-  expect(placeProject("/tmp/r", "/home/u/projects/app/lib", 2)).toBe("/tmp/r/projects/app/lib");
-  expect(placeProject("/tmp/r", "/home/u/projects/app/lib", 1)).toBe("/tmp/r/app/lib");
-  expect(() => placeProject("/tmp/r", "/a", 3)).toThrow("past the filesystem root");
+test("the original core is found through a chain, and only then", () => {
+  const dir = import.meta.dir + "/tree/group/proj";
+  expect(reachesCore(dir, [["PROOF.bend", "import ./core.bend as C\nimport ../../lib/facts.bend as F\n"]])).toBeUndefined();
+  const tmp = mkdtempSync(join(tmpdir(), "falsify-reach-"));
+  try {
+    mkdirSync(join(tmp, "p"));
+    writeFileSync(join(tmp, "p/core.bend"), "import Base\n");
+    writeFileSync(join(tmp, "facts.bend"), "import Base\nimport ./p/core.bend as C\n");
+    expect(reachesCore(join(tmp, "p"), [["PROOF.bend", "import ../facts.bend as F\n"]])).toEqual(["PROOF.bend", "../facts.bend", "./p/core.bend"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("the counterexample file imports the core as C and the laws' other imports", () => {
@@ -268,3 +274,98 @@ test("falsify: a spec under a directory whose name is not plain, such as .worktr
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---- scratch directories: written beside the project, never copied --------
+
+const left = (dir: string) => readdirSync(dir).filter((f) => f.startsWith("bend_mutant_"));
+const withTree = (f: (tmp: string) => void | Promise<void>) => async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "falsify-scratch-"));
+  try {
+    cpSync(join(import.meta.dir, "tree"), join(tmp, "tree"), { recursive: true });
+    await f(join(tmp, "tree"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+};
+
+test("a two-level outward chain checks: the second level resolves against the real tree", withTree((tree) => {
+  const r = run("../src/falsify.ts", "mutants", join(tree, "chain/proj"));
+  expect(r.out).toContain("step_adds_one              PASS");
+  expect(r.out).not.toContain("false on the core itself");
+  expect(r.code).toBe(0);
+  expect(left(join(tree, "chain/proj"))).toEqual([]);
+}));
+
+test("a normal run leaves no scratch directory, sync or async", withTree((tree) => {
+  const proj = join(tree, "group/proj");
+  expect(run("../src/falsify.ts", "mutants", proj).code).toBe(0);
+  expect(left(proj)).toEqual([]);
+  expect(run("../src/falsify.ts", "mutants", proj, "--jobs", "3").code).toBe(0);
+  expect(left(proj)).toEqual([]);
+}));
+
+test("a directory left by a crashed run is removed at the next start", withTree((tree) => {
+  const proj = join(tree, "group/proj");
+  mkdirSync(join(proj, "bend_mutant_crash1"));
+  writeFileSync(join(proj, "bend_mutant_crash1/core.bend"), "stale");
+  expect(run("../src/falsify.ts", "mutants", proj).code).toBe(0);
+  expect(left(proj)).toEqual([]);
+}));
+
+for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+  test(`${sig} in the middle of a run removes the scratch directory`, withTree(async (tree) => {
+    const proj = join(tree, "group/proj");
+    const child = Bun.spawn(["bun", `${import.meta.dir}/../src/falsify.ts`, "mutants", proj, "--jobs", "2"], { stdout: "pipe", stderr: "pipe" });
+    const t0 = Date.now();
+    let seen = false;
+    while (Date.now() - t0 < 20000 && child.exitCode === null) {
+      if (left(proj).length > 0) { seen = true; break; }
+      await Bun.sleep(2);
+    }
+    expect(seen).toBe(true);
+    child.kill(sig);
+    await child.exited;
+    expect(left(proj)).toEqual([]);
+    expect(child.exitCode).toBe(code);
+  }));
+}
+
+test("an error thrown inside a run removes the scratch directory", withTree((tree) => {
+  const proj = join(tree, "group/proj");
+  const script = join(tree, "boom.ts");
+  writeFileSync(script, `import { runMutants } from "${import.meta.dir}/../src/mutants.ts";
+const table = JSON.parse(await Bun.file("${proj}/mutants.json").text());
+const real = Bun.spawnSync;
+(Bun as any).spawnSync = (...a: any[]) => { if (a[0][0] === "bend") throw new Error("boom"); return (real as any)(...a); };
+runMutants("${proj}", table);
+`);
+  const r = Bun.spawnSync(["bun", script], { stdout: "pipe", stderr: "pipe" });
+  expect(r.stderr.toString()).toContain("boom");
+  expect(r.exitCode).not.toBe(0);
+  expect(left(proj)).toEqual([]);
+}));
+
+test("process.exit inside a run removes the scratch directory", withTree((tree) => {
+  const proj = join(tree, "group/proj");
+  const script = join(tree, "exit.ts");
+  writeFileSync(script, `import { runMutants } from "${import.meta.dir}/../src/mutants.ts";
+const table = JSON.parse(await Bun.file("${proj}/mutants.json").text());
+const real = Bun.spawnSync;
+(Bun as any).spawnSync = (...a: any[]) => { if (a[0][0] === "bend") process.exit(7); return (real as any)(...a); };
+runMutants("${proj}", table);
+`);
+  const r = Bun.spawnSync(["bun", script], { stdout: "pipe", stderr: "pipe" });
+  expect(r.exitCode).toBe(7);
+  expect(left(proj)).toEqual([]);
+}));
+
+test("a chain from the kept files back to the original core is reported with its links, and nothing runs", withTree((tree) => {
+  const proj = join(tree, "chain/proj");
+  writeFileSync(join(proj, "FACTS.bend"), "import Base\nimport ./core.bend as C\n");
+  writeFileSync(join(proj, "PROOF.bend"), readFileSync(join(proj, "PROOF.bend"), "utf8").replace("import Base\n", "import Base\nimport ./FACTS.bend as F\n"));
+  const r = run("../src/falsify.ts", "mutants", proj);
+  expect(r.out).toContain("FAIL: PROOF.bend -> ./FACTS.bend -> ./core.bend: the original core.bend is reachable");
+  expect(r.out).not.toContain("PASS");
+  expect(r.code).toBe(1);
+  expect(left(proj)).toEqual([]);
+}));

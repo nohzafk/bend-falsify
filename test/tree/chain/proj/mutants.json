@@ -1,0 +1,11 @@
+[
+  {
+    "law": "step_adds_one",
+    "section": "step adds one",
+    "from": "  S.inc(n)",
+    "to": "  Nat.add(n, 2n)",
+    "why": "the step adds two",
+    "at": { "n": "1n" },
+    "failsIn": "Laws.step_adds_one"
+  }
+]

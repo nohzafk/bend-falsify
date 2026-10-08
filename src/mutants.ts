@@ -1,8 +1,8 @@
 // Every law's proof has to fail when the law is made false -- and the law has
 // to be false, shown by a counterexample, not asserted.
 //
-// For each mutant: copy the project's core, laws and proof into a scratch
-// tree, keep only the tools and one law's section of PROOF.bend, and check:
+// For each mutant: write the project's core, laws and proof into a scratch
+// directory inside the project, keep only the tools and one law's section of PROOF.bend, and check:
 //
 //   1. the counterexample holds on the core as it is      (the claim is true)
 //      -- where the law applies: if every premise the instance carries holds
@@ -42,12 +42,14 @@
 // failing def, and proofs over the same definitions break together, so a mutant
 // run against the whole file would be blamed on whichever proof comes first.
 //
-// The scratch tree mirrors the project's place in the filesystem as deep as
-// its relative imports climb: a project that imports ../../bend-schema/x is
-// placed two directories below the scratch root, under its real ancestors'
-// names, so every import resolves inside the scratch tree. Nothing outside
-// the project and the imports it names is copied, and nothing lands outside
-// the scratch root.
+// The scratch directory is `bend_mutant_<random>`, a plain name (bend refuses
+// an import path with any other kind), inside the project directory. A row
+// writes only the three files into it, under their own names, and rewrites
+// their relative imports one `../` deeper, so every other import resolves
+// against the real tree, however many levels it goes on. Nothing is copied.
+// The one thing that cannot work is a chain from those files back to the real
+// core.bend, which would make the mutant and the original two modules; a run
+// refuses it, naming the chain.
 //
 // A project calls runMutants(projectDir, MUTANTS) from its own table file.
 // It expects core.bend, LAWS.bend and PROOF.bend in projectDir, and a PROOF.bend
@@ -56,9 +58,8 @@
 // A law proved from other laws cannot be checked alone: its mutant names their
 // sections in `with`, and the run keeps those sections and their laws too.
 
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 export interface Mutant {
   law: string;
@@ -156,48 +157,99 @@ export function mutate(text: string, from: string, to: string, law: string, nth?
   return lines.join("\n");
 }
 
-// ---- what a project imports from outside itself -------------------------
+// ---- what a project imports ---------------------------------------------
 
-export interface ImportSite {
-  file: string; // the file that makes the import: core.bend, LAWS.bend, PROOF.bend
-  rel: string; // what is mirrored, relative to the project directory
+// The three files a row writes into the scratch directory under their own
+// names; an import of one of them from a root file stays as it is.
+const OWN = /^\.\/(core|LAWS|PROOF)\.bend$/;
+
+// The relative import paths (`./x`, `../x`) of a text, in order, once each.
+export function relativeImports(text: string): string[] {
+  const paths: string[] = [];
+  for (const m of text.matchAll(/^import (\.\.?\/\S*)/gm)) if (!paths.includes(m[1])) paths.push(m[1]);
+  return paths;
 }
 
-// The outward imports of the given [file, text] pairs. An import that climbs
-// out, `../<name>` at any depth, is mirrored: `<name>` as it stands, which is
-// a directory when the import goes on into it (`../lib/facts.bend` copies
-// `../lib`) and the file itself when it does not (`../shared.bend`).
-// The project directory is copied whole, so an import inside it needs nothing
-// here. `import Base` names no path.
-export function importSites(sources: [string, string][]): ImportSite[] {
-  const sites: ImportSite[] = [];
-  for (const [file, text] of sources) {
-    for (const m of text.matchAll(/^import ((?:\.\.\/)+)([^/\s]+)(?=[/\s]|$)/gm)) {
-      const rel = `${m[1]}${m[2]}`;
-      if (!sites.some((s) => s.rel === rel)) sites.push({ file, rel });
-    }
-  }
-  return sites;
+// The same text for a file that sits one directory below the project, in the
+// scratch directory: every relative import but the three files' own gets one
+// more `../`, so it resolves to the real file in the real tree.
+export function rewriteImports(text: string): string {
+  return text.replace(/^import (\.\.?\/\S*)/gm, (line, p: string) =>
+    OWN.test(p) ? line : `import ../${p.replace(/^\.\//, "")}`);
 }
 
-// How many levels deep the project has to sit in the scratch tree: the deepest
-// `..` in any one outward import, and at least 1.
-function depthOf(paths: string[]): number {
-  return Math.max(1, ...paths.map((p) => p.split("/").filter((s) => s === "..").length));
-}
-
-export function relativeImports(texts: string[]): { paths: string[]; depth: number } {
-  const paths = importSites(texts.map((text) => ["", text])).map((s) => s.rel);
-  return { paths, depth: depthOf(paths) };
-}
-
-// The imports that name nothing on disk. A run stops on them by name, before
-// any check: inside the scratch tree they would surface as a counterexample
-// that is false on the core, which is not what happened.
-export function missingImports(projectDir: string, sites: ImportSite[]): { file: string; rel: string; abs: string }[] {
-  return sites
-    .map((s) => ({ file: s.file, rel: s.rel, abs: resolve(projectDir, s.rel) }))
+// The relative imports of the three files that name nothing on disk. A run
+// stops on them by name, before any check: from the scratch directory they
+// would surface as a counterexample that is false on the core, which is not
+// what happened.
+export function missingImports(projectDir: string, sources: [string, string][]): { file: string; rel: string; abs: string }[] {
+  return sources
+    .flatMap(([file, text]) => relativeImports(text).filter((p) => !OWN.test(p)).map((rel) => ({ file, rel, abs: resolve(projectDir, rel) })))
     .filter((s) => !existsSync(s.abs));
+}
+
+function realOr(p: string): string {
+  try { return realpathSync(p); } catch { return resolve(p); }
+}
+
+// The scratch files import the real tree, so the real core.bend must not be
+// reachable from them: the mutant and the original would be two modules. Walk
+// the import graph from the three files over the real tree, read-only, and
+// return the first chain that reaches the original core.bend.
+export function reachesCore(projectDir: string, sources: [string, string][]): string[] | undefined {
+  const core = realOr(join(projectDir, "core.bend"));
+  const seen = new Set<string>();
+  const walk = (file: string, text: string, root: boolean, chain: string[]): string[] | undefined => {
+    for (const p of relativeImports(text)) {
+      if (root && OWN.test(p)) continue;
+      const target = realOr(resolve(dirname(file), p));
+      const next = [...chain, p];
+      if (target === core) return next;
+      if (seen.has(target) || !existsSync(target)) continue;
+      seen.add(target);
+      let body: string;
+      try { body = readFileSync(target, "utf8"); } catch { continue; } // a directory: nothing to read
+      const hit = walk(target, body, false, next);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  for (const [name, text] of sources) {
+    const hit = walk(join(projectDir, name), text, true, [name]);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+// ---- scratch directories -------------------------------------------------
+
+// Every scratch directory of this process that still exists. They are removed
+// when a row finishes; this set is for the exits that skip that: a signal, an
+// uncaught error, process.exit inside a try.
+const live = new Set<string>();
+let hooked = false;
+function removeLive(): void {
+  for (const d of live) rmSync(d, { recursive: true, force: true });
+  live.clear();
+}
+function hook(): void {
+  if (hooked) return;
+  hooked = true;
+  process.on("exit", removeLive);
+  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]] as const) {
+    process.on(sig, () => {
+      removeLive();
+      // A caller with its own handler (the CLI's) does its own teardown.
+      if (process.listenerCount(sig) === 1) process.exit(code);
+    });
+  }
+}
+
+// Leftovers of a run that died without cleaning up.
+function sweep(projectDir: string): void {
+  for (const e of readdirSync(projectDir, { withFileTypes: true })) {
+    if (e.isDirectory() && e.name.startsWith("bend_mutant_")) rmSync(join(projectDir, e.name), { recursive: true, force: true });
+  }
 }
 
 // ---- the law, and the instance of it a mutant names ---------------------
@@ -404,28 +456,11 @@ export function counterImports(laws: string): string {
   return ["import Base", "import ./core.bend as C", ...others].join("\n");
 }
 
-// Where the project sits in the scratch tree: under its own last `depth`
-// ancestors' names, so "../".repeat(depth) climbs exactly to the root.
-export function placeProject(root: string, projectDir: string, depth: number): string {
-  const abs = resolve(projectDir);
-  const parts = abs.split(sep).filter(Boolean);
-  if (parts.length <= depth) throw new Error(`${abs}: imports climb ${depth} levels, past the filesystem root`);
-  return join(root, ...parts.slice(parts.length - 1 - depth));
-}
-
-const SKIP = (src: string) => !/(^|\/)(node_modules|\.git)$/.test(src);
-
-function inside(root: string, p: string): boolean {
-  const r = relative(root, p);
-  return r !== "" && !r.startsWith("..") && !isAbsolute(r);
-}
-
 function prepareRun(projectDir: string, mutants: Mutant[]) {
   const core = readFileSync(join(projectDir, "core.bend"), "utf8");
   const laws = readFileSync(join(projectDir, "LAWS.bend"), "utf8");
   const proof = readFileSync(join(projectDir, "PROOF.bend"), "utf8");
-  const sites = importSites([["core.bend", core], ["LAWS.bend", laws], ["PROOF.bend", proof]]);
-  const { paths, depth } = relativeImports([core, laws, proof]);
+  const sources: [string, string][] = [["core.bend", core], ["LAWS.bend", laws], ["PROOF.bend", proof]];
   // Two heads, because the two kinds of counterexample are written in two
   // namespaces. An `at` instance is the law's statement as written, so its file
   // is LAWS.bend itself with the laws removed: the core under the laws' own
@@ -449,38 +484,38 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
     return undefined;
   }
 
-  // Everything the scratch tree needs has to be there before the first check:
-  // a missing import would otherwise read as a false counterexample.
-  const gone = missingImports(projectDir, sites);
+  // Everything the scratch files import has to be there before the first
+  // check: a missing import would otherwise read as a false counterexample.
+  const gone = missingImports(projectDir, sources);
   if (gone.length > 0) {
     for (const g of gone) console.log(`FAIL: ${g.file}: import ${g.rel} does not exist: ${g.abs}`);
     return undefined;
   }
+  const chain = reachesCore(projectDir, sources);
+  if (chain) {
+    console.log(`FAIL: ${chain.join(" -> ")}: the original core.bend is reachable from the files a row checks, so the mutant and the original core would be two modules; import the core only as ./core.bend from the three files`);
+    return undefined;
+  }
+  sweep(projectDir);
+  hook();
 
-  // Build the scratch tree for one check and return the project's copy with
-  // the function that removes the tree; the caller removes it whatever happens.
+  // Write one check's files into a fresh directory inside the project, and
+  // return it with the function that removes it; the caller removes it
+  // whatever happens. Only the three files (and the instance) are written,
+  // with their relative imports pointed at the real tree; nothing is copied.
   function scratch(request: CheckRequest): { dir: string; remove: () => void } {
     const { coreText, lawsText = laws, proofText = proof } = request;
-    const root = mkdtempSync(join(tmpdir(), "bend-mutant-"));
+    const dir = mkdtempSync(join(resolve(projectDir), "bend_mutant_"));
+    live.add(dir);
+    const remove = () => { live.delete(dir); rmSync(dir, { recursive: true, force: true }); };
     try {
-      const dir = placeProject(root, projectDir, depth);
-      mkdirSync(dirname(dir), { recursive: true });
-      cpSync(resolve(projectDir), dir, { recursive: true, filter: SKIP });
-      for (const rel of paths) {
-        const from = resolve(projectDir, rel);
-        const to = resolve(dir, rel);
-        if (!inside(root, to)) throw new Error(`import ${rel}: would land outside the scratch tree`);
-        mkdirSync(dirname(to), { recursive: true });
-        if (existsSync(to)) continue; // already copied: it sits inside the project
-        cpSync(from, to, { recursive: true, filter: SKIP });
-      }
-      writeFileSync(join(dir, "core.bend"), coreText);
-      writeFileSync(join(dir, "LAWS.bend"), lawsText);
-      writeFileSync(join(dir, "PROOF.bend"), proofText);
-      if (request.instance !== undefined) writeFileSync(join(dir, "INSTANCE.bend"), request.instance);
-      return { dir, remove: () => rmSync(root, { recursive: true, force: true }) };
+      writeFileSync(join(dir, "core.bend"), rewriteImports(coreText));
+      writeFileSync(join(dir, "LAWS.bend"), rewriteImports(lawsText));
+      writeFileSync(join(dir, "PROOF.bend"), rewriteImports(proofText));
+      if (request.instance !== undefined) writeFileSync(join(dir, "INSTANCE.bend"), rewriteImports(request.instance));
+      return { dir, remove };
     } catch (error) {
-      rmSync(root, { recursive: true, force: true });
+      remove();
       throw error;
     }
   }
@@ -621,6 +656,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       try {
         const r = Bun.spawnSync(["bend", request.file, ...(request.checkOnly ? ["--check-only"] : [])], { cwd: scratch.dir, timeout: LIMIT_MS });
         if (r.exitedDueToTimeout) throw timeoutError(request.file);
+        if (r.signalCode) throw new Error(`${request.file}: checker stopped by ${r.signalCode}`);
         result = verdict(r.stdout.toString() + r.stderr.toString());
       } finally {
         scratch.remove();
