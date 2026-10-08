@@ -782,14 +782,17 @@ export default {
   against the spec file's directory**, so `"./core.bend as C"` means the
   `core.bend` beside the spec. Anything else is passed through — `import Base`
   is added for you, so do not list it.
-- **Every directory in the resolved path must be plain names** — letters,
-  digits, `_` and `-`. The tool hands `bend` an absolute path, and `bend`
-  refuses one whose directories hold anything else. A spec under
-  `/tmp/tmp.AsC1lygCQ8/proj/` fails to compile with
-  `an import path of plain names (letters, digits, _ and -; the hub's files
-  import the hub's)`, whatever the spec says. `mktemp -d` on macOS produces
-  exactly such a name; give the directory one yourself. The mutant path is not
-  affected — its scratch tree is `bend-mutant-XXXXXX`.
+- The scratch file is written in a directory **beside the spec**
+  (`falsify-XXXXXX`, removed when the run ends), and a relative import is
+  handed to `bend` relative to that directory: `"./core.bend as C"` becomes
+  `import ../core.bend as C`. `bend` refuses an import path with a directory
+  that is not plain names — letters, digits, `_` and `-` — counted from the
+  importing file; `..` is allowed. So the directories above the spec do not
+  matter, and a spec under `.worktrees/<branch>/` or `/tmp/tmp.AsC1lygCQ8/`
+  checks. A directory that is not plain **between the spec and an import it
+  names** still fails, with `an import path of plain names (letters, digits, _
+  and -; the hub's files import the hub's)`. The mutant path is not affected —
+  its scratch tree is `bend-mutant-XXXXXX`.
 - Each instance becomes `def <name>() -> <claim>: {==}` in one scratch file.
   The checker runs the code, so an instance closes exactly when the law holds
   at those literals.

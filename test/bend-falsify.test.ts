@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Law, counterImports, duplicateSections, importSites, instanceDefName, instanceHead, lawInstance, missingImports, mutate, placeProject, readLaw, relativeImports, substitute } from "../src/mutants.ts";
@@ -251,4 +251,20 @@ test("cli: a spec may be JSON", () => {
   const r = run("../src/falsify.ts", `${import.meta.dir}/spec_bad.json`);
   expect(r.out).toContain("COUNTEREXAMPLE wrong");
   expect(r.code).toBe(1);
+});
+
+test("falsify: a spec under a directory whose name is not plain, such as .worktrees/", () => {
+  const root = mkdtempSync(join(tmpdir(), "bf-"));
+  try {
+    const at = join(root, ".worktrees", "branch");
+    cpSync(join(import.meta.dir, "tree"), join(at, "tree"), { recursive: true });
+    cpSync(join(import.meta.dir, "spec_ok.ts"), join(at, "spec_ok.ts"));
+    const r = run("../src/falsify.ts", join(at, "spec_ok.ts"));
+    expect(r.out).toContain("holds on all 4 instances");
+    expect(r.code).toBe(0);
+    // The scratch directory beside the spec is gone once the run ends.
+    expect(readdirSync(at).filter((f) => f.startsWith("falsify-"))).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

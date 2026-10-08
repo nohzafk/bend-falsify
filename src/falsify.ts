@@ -24,8 +24,7 @@
 // the core, point `imports` at it, and require a counterexample.
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { type Mutant, runMutants, runMutantsAsync } from "./mutants.ts";
 
 interface Spec {
@@ -89,14 +88,21 @@ if (specPath === "mutants") {
 // A .ts spec is run (it may compute its instances); a .json one is read.
 const spec: Spec = (await import(resolve(specPath))).default;
 const base = dirname(resolve(specPath));
-// "./core.bend as C" -> "import /abs/core.bend as C": the scratch file lives elsewhere.
+// The scratch files live in a directory beside the spec, and a relative import
+// is written relative to that directory: "./core.bend as C" ->
+// "import ../core.bend as C". bend refuses an import path with a name that is
+// not plain (letters, digits, _ and -), counted from the importing file, and
+// ".." is allowed. An absolute path, or one from the system temp directory,
+// carries every name above the project, so a checkout under a directory such
+// as .worktrees/ could not be checked.
+const dir = mkdtempSync(join(base, "falsify-"));
+process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
 const head = ["import Base", ...spec.imports.map((i) => {
   const [path, ...rest] = i.split(" ");
-  return `import ${path.startsWith(".") ? resolve(base, path) : path} ${rest.join(" ")}`;
+  return `import ${path.startsWith(".") ? relative(dir, resolve(base, path)) : path} ${rest.join(" ")}`;
 })].join("\n");
 const body = (xs: Spec["instances"]) => xs.map((x) => `def ${x.name}() -> ${x.claim}:\n  {==}`).join("\n\n");
 
-const dir = mkdtempSync(join(tmpdir(), "falsify-"));
 function run(file: string, text: string): string {
   writeFileSync(join(dir, file), text);
   // 5 s: a check that runs longer is a problem to fix (a large constant, a
