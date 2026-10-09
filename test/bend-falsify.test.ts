@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, counterImports, duplicateSections, instanceDefName, instanceHead, lawInstance, missingImports, mutate, readLaw, reachesCore, relativeImports, rewriteImports, substitute } from "../src/mutants.ts";
+import { type Law, counterImports, duplicateSections, instanceDefName, instanceHead, lawInstance, missingImports, mutate, planImports, readLaw, relativeImports, rewriteImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -14,9 +14,12 @@ test("relative imports are listed once each", () => {
     .toEqual(["./core.bend", "../a/b.bend"]);
 });
 
-test("the scratch files' imports: their own names stay, every other relative import goes one level out", () => {
-  expect(rewriteImports("import Base\nimport ./core.bend as C\nimport ./sub/k.bend as K\nimport ../x.bend as X\nimport ../../y/z.bend as Y\n"))
-    .toBe("import Base\nimport ./core.bend as C\nimport ../sub/k.bend as K\nimport ../../x.bend as X\nimport ../../../y/z.bend as Y\n");
+test("the scratch files' imports: scratch files by their scratch place, anything else by the real file", () => {
+  const dir = import.meta.dir + "/tree/group/proj";
+  const plan = { places: new Map([[dir + "/core.bend", "core.bend"]]), chain: [], problems: [] };
+  const scratch = dir + "/bend_mutant_x";
+  expect(rewriteImports("import Base\nimport ./core.bend as C\nimport ./sub/k.bend as K\nimport ../x.bend as X\n", plan, scratch, dir, scratch))
+    .toBe("import Base\nimport ./core.bend as C\nimport ../sub/k.bend as K\nimport ../../x.bend as X\n");
 });
 
 test("an import that names nothing on disk is reported, with the file that makes it", () => {
@@ -25,15 +28,17 @@ test("an import that names nothing on disk is reported, with the file that makes
     .toEqual([{ file: "core.bend", rel: "../gone.bend", abs: `${import.meta.dir}/tree/group/gone.bend` }]);
 });
 
-test("the original core is found through a chain, and only then", () => {
-  const dir = import.meta.dir + "/tree/group/proj";
-  expect(reachesCore(dir, [["PROOF.bend", "import ./core.bend as C\nimport ../../lib/facts.bend as F\n"]])).toBeUndefined();
-  const tmp = mkdtempSync(join(tmpdir(), "falsify-reach-"));
+test("the files that reach the core are planned, and only those", () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "falsify-reach-")));
   try {
     mkdirSync(join(tmp, "p"));
     writeFileSync(join(tmp, "p/core.bend"), "import Base\n");
-    writeFileSync(join(tmp, "facts.bend"), "import Base\nimport ./p/core.bend as C\n");
-    expect(reachesCore(join(tmp, "p"), [["PROOF.bend", "import ../facts.bend as F\n"]])).toEqual(["PROOF.bend", "../facts.bend", "./p/core.bend"]);
+    writeFileSync(join(tmp, "facts.bend"), "import Base\nimport ./p/core.bend as C\nimport ./leaf.bend as L\n");
+    writeFileSync(join(tmp, "leaf.bend"), "import Base\n");
+    const plan = planImports(join(tmp, "p"), [["PROOF.bend", "import ../facts.bend as F\nimport ../leaf.bend as L\n"]]);
+    expect(plan.chain.map((f) => f.real)).toEqual([join(tmp, "facts.bend")]);
+    expect(plan.chain[0].name).toBe("facts_0.bend");
+    expect(plan.problems).toEqual([]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -359,13 +364,40 @@ runMutants("${proj}", table);
   expect(left(proj)).toEqual([]);
 }));
 
-test("a chain from the kept files back to the original core is reported with its links, and nothing runs", withTree((tree) => {
+// FACTS.bend imports the project's core and PROOF.bend uses one of its lemmas.
+const factsFixture = (proj: string, factsPath: string, coreImport: string) => {
+  writeFileSync(factsPath, `import Base\nimport ${coreImport} as C\n\ndef step_eq(n: Nat) -> {C.step(n) == Nat.add(n, 1n) : Nat}:\n  {==}\n`);
+  const rel = factsPath.startsWith(proj + "/") ? "./FACTS.bend" : "../shared/FACTS.bend";
+  writeFileSync(join(proj, "PROOF.bend"), readFileSync(join(proj, "PROOF.bend"), "utf8")
+    .replace("import Base\n", `import Base\nimport ${rel} as F\n`).replace("  {==}", "  F.step_eq(n)"));
+  writeFileSync(join(proj, "mutants.json"), readFileSync(join(proj, "mutants.json"), "utf8").replace("Laws.step_adds_one\"", "step_eq\""));
+};
+
+test("a proof that reaches the core through a shared file checks, and the mutant breaks it", withTree((tree) => {
   const proj = join(tree, "chain/proj");
-  writeFileSync(join(proj, "FACTS.bend"), "import Base\nimport ./core.bend as C\n");
-  writeFileSync(join(proj, "PROOF.bend"), readFileSync(join(proj, "PROOF.bend"), "utf8").replace("import Base\n", "import Base\nimport ./FACTS.bend as F\n"));
+  factsFixture(proj, join(proj, "FACTS.bend"), "./core.bend");
   const r = run("../src/falsify.ts", "mutants", proj);
-  expect(r.out).toContain("FAIL: PROOF.bend -> ./FACTS.bend -> ./core.bend: the original core.bend is reachable");
+  expect(r.out).toContain("PASS: all 1 mutants");
+  expect(r.code).toBe(0);
+  expect(left(proj)).toEqual([]);
+}));
+
+test("a shared file outside the project directory that imports the core checks too", withTree((tree) => {
+  const proj = join(tree, "chain/proj");
+  mkdirSync(join(tree, "chain/shared"));
+  factsFixture(proj, join(tree, "chain/shared/FACTS.bend"), "../proj/core.bend");
+  const r = run("../src/falsify.ts", "mutants", proj);
+  expect(r.out).toContain("PASS: all 1 mutants");
+  expect(r.code).toBe(0);
+  expect(left(proj)).toEqual([]);
+}));
+
+test("a chain file's missing import stops the run by name", withTree((tree) => {
+  const proj = join(tree, "chain/proj");
+  factsFixture(proj, join(proj, "FACTS.bend"), "./core.bend");
+  writeFileSync(join(proj, "FACTS.bend"), readFileSync(join(proj, "FACTS.bend"), "utf8") + "import ./gone.bend as G\n");
+  const r = run("../src/falsify.ts", "mutants", proj);
+  expect(r.out).toContain("FACTS.bend: import ./gone.bend does not exist");
   expect(r.out).not.toContain("PASS");
-  expect(r.code).toBe(1);
   expect(left(proj)).toEqual([]);
 }));

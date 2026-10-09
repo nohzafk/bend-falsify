@@ -101,13 +101,15 @@ file, at any depth. Nothing is copied. For each check the tool writes the three
 files (core with the mutation, LAWS with the other laws removed, PROOF with the
 kept sections) into a scratch directory **inside the project directory**,
 `bend_mutant_<random>/`, under their own names, and rewrites their relative
-imports so they resolve to the real files in the real tree: an import of
-`./core.bend`, `./LAWS.bend` or `./PROOF.bend` stays (the scratch files import
-each other), any other relative import gets one more `../`
-(`./sub/k.bend` becomes `../sub/k.bend`, `../shared.bend` becomes
-`../../shared.bend`). Every other import then resolves against the real tree,
-however many levels deep the chain goes. Parallel rows each get their own
-directory.
+imports. Every file in their import graph that transitively imports the
+project's `core.bend` (say a shared `FACTS.bend` that imports `./core.bend`,
+which `PROOF.bend` imports) gets a scratch version too, in
+`bend_mutant_<random>/chain/` -- wherever the file lives, inside the project or
+not -- so the mutant and the original core are never two modules. In every
+written file, an import of a file that has a scratch version points at it, and
+any other relative import points at the real file in the real tree (so
+`./sub/k.bend` becomes `../sub/k.bend`). Files that do not reach the core are
+never written or copied. Parallel rows each get their own directory.
 
 **Add `bend_mutant_*/` to your `.gitignore`.** The directory is removed when
 its check finishes, on a normal exit, on SIGINT and SIGTERM, on an uncaught
@@ -126,13 +128,12 @@ Rules that follow, and the ones that surprise people:
   `FAIL: LAWS.bend: import ../shared.bend does not exist: /lib/shared.bend`. It
   is not a counter failure, which is what it would look like from the
   scratch directory: `the counterexample is false on the core itself`.
-- **The original `core.bend` must not be reachable from the three files
-  through other files.** If `PROOF.bend` imports a `FACTS.bend` that imports
-  `./core.bend`, the mutant and the original would be two modules. Before any
-  check the tool walks the import graph from the three files over the real tree
-  (read-only), and refuses the run with the chain:
-  `FAIL: PROOF.bend -> ./FACTS.bend -> ./core.bend: the original core.bend is
-  reachable ...`. Take the dependency on the core out of the shared file.
+- **A file that reaches the core is fine.** Before any check the tool walks
+  the import graph from the three files over the real tree (read-only, each
+  file once) and gives the files on a chain to `core.bend` the scratch versions
+  described above; only their import lines change. An import in such a file
+  that names nothing on disk stops the run by name, like one in the three
+  files.
 - Only plain relative imports (`./x`, `../x`) are rewritten and walked.
 
 ---
@@ -910,7 +911,6 @@ is not printed)
 | `FAIL: PROOF.bend: duplicate section header "# ---- <name> ----" (lines <a>, <b>); give each section its own name` | two `# ---- <name> ----` headers are identical. Both sections would be kept under one name and their text concatenated, so the proof would break somewhere that names neither. Every line the repeated header sits on is listed |
 | `<law>: no section "<section>" in PROOF.bend` | no `# ---- <section> ----` header with that exact text. Usually a header that does not match the format, or a `section` copied from another law |
 | `no mutant has the section "<sec>", so its law is unknown` | a `with` entry that names a section no mutant in the table has. Every name in `with` must be some row's `section` |
-| `FAIL: <chain>: the original core.bend is reachable ...` | a file the three import, through some chain, imports the project's own `core.bend`. The chain is listed link by link |
 | `<file>: the checker ran past 5 s: a problem to fix, not a limit to raise` | a check that does not finish in 5 s |
 
 ---
