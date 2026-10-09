@@ -106,6 +106,34 @@ test("an at instance is built under the alias LAWS.bend uses", () => {
   expect(r.code).toBe(0);
 });
 
+test("a mutant may name LAWS.bend or an imported FACTS.bend as its file", () => {
+  const dir = `${import.meta.dir}/tree/anyfile`;
+  const r = run("../src/falsify.ts", "mutants", dir);
+  expect(r.out).toContain("PASS: all 2 mutants");
+  expect(r.code).toBe(0);
+  expect(readdirSync(dir).filter((e) => e.startsWith("bend_mutant_"))).toEqual([]);
+});
+
+test("a mutant's file must be one the project imports, and hold the line", () => {
+  const tmp = mkdtempSync(join(realpathSync(tmpdir()), "bend-falsify-anyfile-"));
+  try {
+    const dir = join(tmp, "p");
+    cpSync(`${import.meta.dir}/tree/anyfile`, dir, { recursive: true });
+    writeFileSync(join(dir, "OTHER.bend"), "def x() -> Nat:\n  0n\n");
+    const table = JSON.parse(readFileSync(join(dir, "mutants.json"), "utf8"));
+    const at = (file: string, from?: string) => {
+      writeFileSync(join(dir, "mutants.json"), JSON.stringify([{ ...table[1], file, ...(from ? { from } : {}) }]));
+      return run("../src/falsify.ts", "mutants", dir);
+    };
+    expect(at("OTHER.bend").out).toContain("the file to mutate is not imported by core.bend, LAWS.bend or PROOF.bend: OTHER.bend");
+    expect(at("LAWS.bend").out).toContain("the line to mutate is not in LAWS.bend");
+    expect(at("PROOF.bend").out).toContain("PROOF.bend is not mutated");
+    expect(at("core.bend").out).toContain("the line to mutate is not in core.bend");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("a mutation replaces exactly one whole line, or refuses", () => {
   expect(mutate("a\nb\nc", "b", "x", "L")).toBe("a\nx\nc");
   expect(() => mutate("a\nb", "z", "x", "L")).toThrow("not in core.bend");

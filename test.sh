@@ -156,6 +156,12 @@ bun src/falsify.ts mutants test/tree/chain/proj | grep -q "PASS: all 1 mutants" 
 [ -z "$(find test examples -name 'bend_mutant_*' 2>/dev/null)" ] || { echo "FAIL: a scratch directory was left behind"; exit 1; }
 echo "  a two-level chain checks, and no bend_mutant_ directory is left"
 
+# A mutant may name LAWS.bend, or a FACTS.bend it imports, as its file: every
+# file on an import chain to it reads the mutated version, PROOF.bend included.
+bun src/falsify.ts mutants test/tree/anyfile | grep -q "PASS: all 2 mutants" || { echo "FAIL: a mutant on LAWS.bend or FACTS.bend"; exit 1; }
+[ -z "$(find test examples -name 'bend_mutant_*' 2>/dev/null)" ] || { echo "FAIL: a scratch directory was left behind"; exit 1; }
+echo "  a mutant on LAWS.bend and one on an imported FACTS.bend are caught"
+
 echo "== 6. the types =="
 bunx tsc -p .
 

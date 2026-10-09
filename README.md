@@ -346,7 +346,8 @@ One row per law. All fields, and what each one has to be:
 | --- | --- | --- |
 | `law` | string | the law to check, exactly as `law <name>:` names it in `LAWS.bend` |
 | `section` | string | the text between the dashes of its `# ---- <name> ----` header |
-| `from` | string | one whole line of `core.bend`, replaced |
+| `from` | string | one whole line of `file` (`core.bend` unless `file` says otherwise), replaced |
+| `file` | string, optional | the file `from` is in, relative to the unit directory: `LAWS.bend`, or a file the project imports (say `FACTS.bend`). Absent means `core.bend` |
 | `to` | string | the line put in its place |
 | `why` | string | why the law is false after the change, in words |
 | `at` | object | the law's binders, each at a literal — `{ "n": "0n" }`. The tool reads the law and builds the instance, so it cannot be a claim that is not the law |
@@ -394,6 +395,21 @@ and the fallback.
   nth: "  Nat.add(n, 0n)"`. The numbers are 1-based, in file order.
 - An `nth` past the last occurrence is refused:
   `nth 5, but the line occurs 2 times in core.bend: "  Nat.add(n, 0n)"`.
+
+### `file`: mutating a file other than the core
+
+A def that the laws are held to may live in `LAWS.bend` (a reference
+definition) or in a `FACTS.bend` it imports. Name that file in `file`, and the
+row is checked exactly like a core mutant: the unmutated run passes, the
+counterexample is false on the mutant, and the mutated proof set fails in
+`failsIn`. The mutated file is written to the scratch directory like the core
+is, and every file on an import chain to it reads the mutated version —
+`PROOF.bend` (which imports `LAWS.bend`) and other files that import the
+`FACTS.bend`. For a `LAWS.bend` mutant, the `at` instance file is built from
+the mutated `LAWS.bend` too. `PROOF.bend` itself cannot be mutated, and a file
+that `core.bend`, `LAWS.bend` and `PROOF.bend` do not import is refused. The
+refusals of `from` and `nth` name the file (`not in LAWS.bend`). See
+`test/tree/anyfile`.
 
 ### The five checks
 

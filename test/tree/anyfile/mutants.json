@@ -1,0 +1,22 @@
+[
+  {
+    "law": "plus0_is_ref",
+    "section": "plus0 is the reference",
+    "file": "LAWS.bend",
+    "from": "  Nat.add(n, F.amount())",
+    "to": "  Nat.add(n, 1n)",
+    "why": "the reference adds one",
+    "at": { "n": "0n" },
+    "failsIn": "Laws.plus0_is_ref"
+  },
+  {
+    "law": "plus0_is_ref",
+    "section": "plus0 is the reference",
+    "file": "FACTS.bend",
+    "from": "  0n",
+    "to": "  1n",
+    "why": "the reference's amount is one",
+    "at": { "n": "0n" },
+    "failsIn": "Laws.plus0_is_ref"
+  }
+]

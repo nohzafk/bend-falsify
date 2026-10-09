@@ -63,7 +63,12 @@ import { dirname, join, relative, resolve } from "node:path";
 export interface Mutant {
   law: string;
   section: string; // the "# ---- <section> ----" header in PROOF.bend
-  from: string; // a line of core.bend, replaced whole
+  from: string; // a line of `file` (core.bend by default), replaced whole
+  // The file the line is in, relative to the unit directory. Absent means
+  // core.bend. It may be LAWS.bend, or any file the three files import
+  // (a FACTS.bend, say); PROOF.bend is not mutated. Every file on an import
+  // chain to it reads the mutated version.
+  file?: string;
   to: string;
   why: string; // why the law is false afterwards, in words
   // The law's binders, each with the Bend expression that stands for it -- e.g.
@@ -143,15 +148,15 @@ export function onlyLaws(text: string, keep: string[]): string {
 
 // Replace exactly one whole line of the core, or refuse: a mutation that does
 // not apply would make the mutant identical to the control.
-export function mutate(text: string, from: string, to: string, law: string, nth?: number): string {
+export function mutate(text: string, from: string, to: string, law: string, nth?: number, file = "core.bend"): string {
   const lines = text.split("\n");
   const hits = lines.flatMap((l, i) => (l === from ? [i] : []));
-  if (hits.length === 0) throw new Error(`${law}: the line to mutate is not in core.bend: ${JSON.stringify(from)}`);
+  if (hits.length === 0) throw new Error(`${law}: the line to mutate is not in ${file}: ${JSON.stringify(from)}`);
   if (nth === undefined && hits.length > 1) {
-    throw new Error(`${law}: the line to mutate occurs ${hits.length} times in core.bend (lines ${hits.map((i) => i + 1).join(", ")}); say which with nth: ${JSON.stringify(from)}`);
+    throw new Error(`${law}: the line to mutate occurs ${hits.length} times in ${file} (lines ${hits.map((i) => i + 1).join(", ")}); say which with nth: ${JSON.stringify(from)}`);
   }
   const hit = hits[(nth ?? 1) - 1];
-  if (hit === undefined) throw new Error(`${law}: nth ${nth}, but the line occurs ${hits.length} times in core.bend: ${JSON.stringify(from)}`);
+  if (hit === undefined) throw new Error(`${law}: nth ${nth}, but the line occurs ${hits.length} times in ${file}: ${JSON.stringify(from)}`);
   lines[hit] = to;
   return lines.join("\n");
 }
@@ -197,7 +202,7 @@ export interface ImportPlan { places: Map<string, string>; chain: ChainFile[]; p
 
 // Walk the import graph from the three files over the real tree, read-only
 // (each file once), and find the files that reach the core.
-export function planImports(projectDir: string, sources: [string, string][]): ImportPlan {
+export function planImports(projectDir: string, sources: [string, string][], targets: string[] = []): ImportPlan {
   const base = realOr(projectDir);
   const places = new Map<string, string>(ROOTS.map((n) => [realOr(join(base, n)), n]));
   const nodes = new Map<string, { text: string; deps: string[] }>();
@@ -218,7 +223,9 @@ export function planImports(projectDir: string, sources: [string, string][]): Im
   };
   for (const [name, text] of sources) collect(name, text, base);
   // A file reaches the core when it imports a root or a file that does.
-  const reaches = new Set<string>();
+  // A file a row mutates is itself given a scratch version, and so is every
+  // file that imports it.
+  const reaches = new Set<string>(targets.map((t) => realOr(resolve(base, t))).filter((t) => nodes.has(t)));
   for (let grew = true; grew;) {
     grew = false;
     for (const [real, node] of nodes) {
@@ -496,9 +503,6 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
   // its file is built from the laws' imports alone, so no def of LAWS.bend is
   // in scope for it. `def` is the name the instance is appended as, which has
   // to avoid the names the laws' own file declares.
-  const atHead = instanceHead(laws);
-  const atFile = { head: atHead, def: instanceDefName(atHead) };
-  const counterFile = { head: counterImports(laws), def: "counter" };
 
   // Two sections with one name would be kept together, and their text
   // concatenated, so the proof would break somewhere that names neither:
@@ -518,7 +522,7 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
     for (const g of gone) console.log(`FAIL: ${g.file}: import ${g.rel} does not exist: ${g.abs}`);
     return undefined;
   }
-  const plan = planImports(projectDir, sources);
+  const plan = planImports(projectDir, sources, mutants.flatMap((m) => (m.file === undefined ? [] : [m.file])));
   if (plan.problems.length > 0) {
     for (const p of plan.problems) console.log(`FAIL: ${p}`);
     return undefined;
@@ -533,6 +537,7 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
   // with their relative imports pointed at the real tree; nothing is copied.
   function scratch(request: CheckRequest): { dir: string; remove: () => void } {
     const { coreText, lawsText = laws, proofText = proof } = request;
+    const pick = (f: ChainFile): string => (request.chain?.real === f.real ? request.chain.text : f.text);
     const dir = mkdtempSync(join(base, "bend_mutant_"));
     live.add(dir);
     const remove = () => { live.delete(dir); rmSync(dir, { recursive: true, force: true }); };
@@ -546,7 +551,7 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
       put("PROOF.bend", proofText, base);
       if (request.instance !== undefined) put("INSTANCE.bend", request.instance, base);
       if (plan.chain.length > 0) mkdirSync(join(dir, "chain"));
-      for (const f of plan.chain) put(`chain/${f.name}`, f.text, dirname(f.real));
+      for (const f of plan.chain) put(`chain/${f.name}`, pick(f), dirname(f.real));
       return { dir, remove };
     } catch (error) {
       remove();
@@ -558,20 +563,23 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
   // it holds exactly when both sides reduce to the same term. `file` is the
   // instance file's head and the name the instance is appended as: the two
   // namespaces above differ in nothing else.
-  function checkClaim(coreText: string, claim: string, file: { head: string; def: string }): CheckRequest {
-    return { coreText, file: "INSTANCE.bend", checkOnly: true,
-      instance: `${file.head}\n\ndef ${file.def}() -> ${claim}:\n  {==}\n` };
+  function checkClaim(v: Variant, claim: string, kind: "at" | "counter"): CheckRequest {
+    const l = v.lawsText ?? laws;
+    const head = kind === "at" ? instanceHead(l) : counterImports(l);
+    const def = kind === "at" ? instanceDefName(head) : "counter";
+    return { ...v, file: "INSTANCE.bend", checkOnly: true,
+      instance: `${head}\n\ndef ${def}() -> ${claim}:\n  {==}\n` };
   }
 
-  function proofChecks(coreText: string, m: Mutant, withLaws: [string, string][]): CheckRequest {
+  function proofChecks(v: Variant, m: Mutant, withLaws: [string, string][]): CheckRequest {
     const { head, secs } = sections(proof);
     const wanted = [m.section, ...withLaws.map(([, sec]) => sec)].map((x) => `# ---- ${x} ----`);
     const kept = secs.filter(([h]) => h.includes("tools") || wanted.includes(h));
     if (!kept.some(([h]) => h === `# ---- ${m.section} ----`)) {
       throw new Error(`${m.law}: no section "${m.section}" in PROOF.bend`);
     }
-    return { coreText, file: "PROOF.bend", checkOnly: false,
-      lawsText: onlyLaws(laws, [m.law, ...withLaws.map(([law]) => law)]),
+    return { ...v, file: "PROOF.bend", checkOnly: false,
+      lawsText: onlyLaws(v.lawsText ?? laws, [m.law, ...withLaws.map(([law]) => law)]),
       proofText: head + kept.map(([h, b]) => h + b).join("") };
   }
 
@@ -590,9 +598,9 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
 
     let claim: string;
     let premises: Instance["premises"] = [];
-    let file = counterFile;
+    let kind: "at" | "counter" = "counter";
     if (m.at !== undefined) {
-      file = atFile;
+      kind = "at";
       try {
         const inst = lawInstance(readLaw(laws, m.law), m.at);
         claim = inst.claim;
@@ -606,9 +614,20 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
       return fail(`no counterexample: give "at" with a value for each of the law's binders, or "counter" with a claim of your own`);
     }
 
-    let mutated: string;
+    const original: Variant = { coreText: core };
+    let mutated: Variant;
     try {
-      mutated = mutate(core, m.from, m.to, m.law, m.nth);
+      const file = m.file ?? "core.bend";
+      const real = realOr(join(base, file));
+      const edit = (text: string): string => mutate(text, m.from, m.to, m.law, m.nth, file);
+      if (real === realOr(join(base, "core.bend"))) mutated = { coreText: edit(core) };
+      else if (real === realOr(join(base, "LAWS.bend"))) mutated = { coreText: core, lawsText: edit(laws) };
+      else if (real === realOr(join(base, "PROOF.bend"))) throw new Error(`${m.law}: PROOF.bend is not mutated; the mutant has to be false code or a false law`);
+      else {
+        const f = plan.chain.find((c) => c.real === real);
+        if (!f) throw new Error(`${m.law}: the file to mutate is not imported by core.bend, LAWS.bend or PROOF.bend: ${file}`);
+        mutated = { coreText: core, chain: { real, text: edit(f.text) } };
+      }
     } catch (e) {
       return fail((e as Error).message);
     }
@@ -620,22 +639,22 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
     // so the row stays a checked claim. A `counter` carries no premise.
     let falseOnCore: Instance["premises"][number] | undefined;
     for (const p of premises) {
-      if (!(yield checkClaim(core, p.equation, file)).ok) { falseOnCore = p; break; }
+      if (!(yield checkClaim(original, p.equation, kind)).ok) { falseOnCore = p; break; }
     }
-    if (falseOnCore === undefined && !(yield checkClaim(core, claim, file)).ok) {
+    if (falseOnCore === undefined && !(yield checkClaim(original, claim, kind)).ok) {
       return fail(`the counterexample is false on the core itself: ${claim}`);
     }
     let falsePremise: Instance["premises"][number] | undefined;
     for (const p of premises) {
-      if (!(yield checkClaim(mutated, p.equation, file)).ok) { falsePremise = p; break; }
+      if (!(yield checkClaim(mutated, p.equation, kind)).ok) { falsePremise = p; break; }
     }
     if (falsePremise) {
       return fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
     }
-    if ((yield checkClaim(mutated, claim, file)).ok) {
+    if ((yield checkClaim(mutated, claim, kind)).ok) {
       return fail(`the counterexample still holds on the mutant, so the law is not shown false: ${claim}`);
     }
-    const control = yield proofChecks(core, m, withLaws);
+    const control = yield proofChecks(original, m, withLaws);
     if (!control.ok) {
       return fail(`the proof does not check even unmutated (${control.location})`);
     }
@@ -652,8 +671,12 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
   return { row, scratch };
 }
 
+// The texts a check reads in place of the originals: the core, LAWS.bend, or
+// one chain file, whichever the row mutates.
+interface Variant { coreText: string; lawsText?: string; chain?: { real: string; text: string } }
 interface CheckRequest {
   coreText: string;
+  chain?: { real: string; text: string };
   file: string;
   checkOnly: boolean;
   instance?: string;
