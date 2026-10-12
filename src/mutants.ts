@@ -59,6 +59,7 @@
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { bendCommand, CPU_MESSAGE, CPU_SIGNAL, NOT_FOUND, NOT_FOUND_MESSAGE, WALL_MESSAGE, WALL_MS } from "./limit.ts";
 
 export interface Mutant {
   law: string;
@@ -92,9 +93,6 @@ export interface Mutant {
   with?: string[];
 }
 
-// 5 s, as bend-check: a check that runs longer is a problem to fix (a large
-// constant, a fuel loop, application code in a goal), not a limit to raise.
-const LIMIT_MS = 5000;
 
 // PROOF.bend as its head (imports) and its "# ---- name ----" sections.
 export function sections(text: string): { head: string; secs: [string, string][] } {
@@ -689,9 +687,8 @@ interface RowResult { line: string; bad: boolean }
 function verdict(out: string): CheckResult {
   return { ok: /^ALL PROOFS CHECK$/m.test(out), location: out.match(/^Location: (\S+)/m)?.[1] ?? "?" };
 }
-function timeoutError(file: string): Error {
-  return new Error(`${file}: the checker ran past ${LIMIT_MS / 1000} s: a problem to fix, not a limit to raise`);
-}
+function cpuError(file: string): Error { return new Error(`${file}: ${CPU_MESSAGE}`); }
+function wallError(file: string): Error { return new Error(`${file}: ${WALL_MESSAGE}`); }
 function summary(bad: number, count: number): void {
   console.log(bad > 0
     ? `FAIL: ${bad} of ${count} mutants did not break the proof they target`
@@ -711,8 +708,10 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
       const scratch = run.scratch(request);
       let result: CheckResult;
       try {
-        const r = Bun.spawnSync(["bend", request.file, ...(request.checkOnly ? ["--check-only"] : [])], { cwd: scratch.dir, timeout: LIMIT_MS });
-        if (r.exitedDueToTimeout) throw timeoutError(request.file);
+        const r = Bun.spawnSync(bendCommand([request.file, ...(request.checkOnly ? ["--check-only"] : [])]), { cwd: scratch.dir, timeout: WALL_MS });
+        if (r.exitedDueToTimeout) throw wallError(request.file);
+        if (r.signalCode === CPU_SIGNAL) throw cpuError(request.file);
+        if (r.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
         if (r.signalCode) throw new Error(`${request.file}: checker stopped by ${r.signalCode}`);
         result = verdict(r.stdout.toString() + r.stderr.toString());
       } finally {
@@ -758,16 +757,18 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
     let timedOut = false;
     const stop = () => { child?.kill("SIGKILL"); };
     try {
-      child = Bun.spawn(["bend", request.file, ...(request.checkOnly ? ["--check-only"] : [])], {
+      child = Bun.spawn(bendCommand([request.file, ...(request.checkOnly ? ["--check-only"] : [])]), {
         cwd: scratch.dir, stdin: "ignore", stdout: "pipe", stderr: "pipe",
       });
       controller.signal.addEventListener("abort", stop, { once: true });
-      timer = setTimeout(() => { timedOut = true; stop(); }, LIMIT_MS);
+      timer = setTimeout(() => { timedOut = true; stop(); }, WALL_MS);
       const [out, err] = await Promise.all([
         new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
       ]);
-      if (timedOut) throw timeoutError(request.file);
+      if (timedOut) throw wallError(request.file);
       controller.signal.throwIfAborted();
+      if (child.signalCode === CPU_SIGNAL) throw cpuError(request.file);
+      if (child.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
       if (child.signalCode) throw new Error(`${request.file}: checker stopped by ${child.signalCode}`);
       return verdict(out + err);
     } catch (error) {

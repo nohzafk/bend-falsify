@@ -25,6 +25,7 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { bendCommand, CPU_MESSAGE, CPU_SIGNAL, NOT_FOUND, NOT_FOUND_MESSAGE, WALL_MESSAGE, WALL_MS } from "./limit.ts";
 import { type Mutant, runMutants, runMutantsAsync } from "./mutants.ts";
 
 interface Spec {
@@ -105,10 +106,10 @@ const body = (xs: Spec["instances"]) => xs.map((x) => `def ${x.name}() -> ${x.cl
 
 function run(file: string, text: string): string {
   writeFileSync(join(dir, file), text);
-  // 5 s: a check that runs longer is a problem to fix (a large constant, a
-  // fuel loop, application code in a goal), not a limit to raise.
-  const r = Bun.spawnSync(["bend", join(dir, file), "--check-only"], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
-  if (r.exitedDueToTimeout) { console.log(`TIMEOUT: the checker ran past 5 s: a problem to fix, not a limit to raise`); process.exit(1); }
+  const r = Bun.spawnSync(bendCommand([join(dir, file), "--check-only"]), { stdout: "pipe", stderr: "pipe", timeout: WALL_MS });
+  if (r.exitedDueToTimeout) { console.log(`TIMEOUT: ${WALL_MESSAGE}`); process.exit(1); }
+  if (r.signalCode === CPU_SIGNAL) { console.log(`TIMEOUT: ${CPU_MESSAGE}`); process.exit(1); }
+  if (r.exitCode === NOT_FOUND) { console.log(NOT_FOUND_MESSAGE); process.exit(1); }
   return r.stdout.toString() + r.stderr.toString();
 }
 const clean = (out: string) => /^ALL PROOFS CHECK$/m.test(out);
@@ -146,10 +147,16 @@ try {
         const x = spec.instances[i];
         const file = join(dir, `i${i}.bend`);
         writeFileSync(file, `${head}\n\n${body([x])}\n`);
-        const p = Bun.spawn(["bend", file, "--check-only"], { stdout: "pipe", stderr: "pipe", timeout: 5000 });
+        const p = Bun.spawn(bendCommand([file, "--check-only"]), { stdout: "pipe", stderr: "pipe" });
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; p.kill("SIGKILL"); }, WALL_MS);
         const out = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
         await p.exited;
-        if (p.signalCode) bad.push(`${x.name}: TIMEOUT, the checker ran past 5 s: a problem to fix, not a limit to raise\n  claim: ${x.claim}`);
+        clearTimeout(timer);
+        if (timedOut) bad.push(`${x.name}: TIMEOUT, ${WALL_MESSAGE}\n  claim: ${x.claim}`);
+        else if (p.signalCode === CPU_SIGNAL) bad.push(`${x.name}: TIMEOUT, ${CPU_MESSAGE}\n  claim: ${x.claim}`);
+        else if (p.exitCode === NOT_FOUND) bad.push(`${x.name}: ${NOT_FOUND_MESSAGE}`);
+        else if (p.signalCode) bad.push(`${x.name}: checker stopped by ${p.signalCode}\n  claim: ${x.claim}`);
         else if (!clean(out)) bad.push(`${x.name}: ${report(out)}\n  claim: ${x.claim}`);
         done++;
         if (done % step === 0) console.error(`  ${done}/${spec.instances.length} checked, ${bad.length} failing`);

@@ -369,7 +369,7 @@ test("an error thrown inside a run removes the scratch directory", withTree((tre
   writeFileSync(script, `import { runMutants } from "${import.meta.dir}/../src/mutants.ts";
 const table = JSON.parse(await Bun.file("${proj}/mutants.json").text());
 const real = Bun.spawnSync;
-(Bun as any).spawnSync = (...a: any[]) => { if (a[0][0] === "bend") throw new Error("boom"); return (real as any)(...a); };
+(Bun as any).spawnSync = (...a: any[]) => { if (a[0].includes("bend")) throw new Error("boom"); return (real as any)(...a); };
 runMutants("${proj}", table);
 `);
   const r = Bun.spawnSync(["bun", script], { stdout: "pipe", stderr: "pipe" });
@@ -384,7 +384,7 @@ test("process.exit inside a run removes the scratch directory", withTree((tree) 
   writeFileSync(script, `import { runMutants } from "${import.meta.dir}/../src/mutants.ts";
 const table = JSON.parse(await Bun.file("${proj}/mutants.json").text());
 const real = Bun.spawnSync;
-(Bun as any).spawnSync = (...a: any[]) => { if (a[0][0] === "bend") process.exit(7); return (real as any)(...a); };
+(Bun as any).spawnSync = (...a: any[]) => { if (a[0].includes("bend")) process.exit(7); return (real as any)(...a); };
 runMutants("${proj}", table);
 `);
   const r = Bun.spawnSync(["bun", script], { stdout: "pipe", stderr: "pipe" });
