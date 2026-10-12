@@ -64,20 +64,21 @@ Exit codes, both commands:
 | 1 | a counterexample, a wrong mutant, a timeout, or any thrown error |
 | 2 | the command line was wrong: no spec, or a `mutants.json` that is not an array |
 
-A check that uses more than 5 s of CPU is stopped. The limit counts CPU time,
+A check that uses more than 10 s of CPU is stopped. The limit counts CPU time,
 not wall-clock time, so a loaded machine (several gates running at once) does
-not fail checks at random; CPU time is the sum over the checker's threads, so
-on an idle machine a check reaches it in less than 5 s of wall time. The limit
+not fail checks at random. CPU time is the sum over the checker's threads; the
+checker uses about two, so 10 s of CPU is about 5 s of wall time on an idle
+machine. The limit
 is not configurable. The tool reports it as `TIMEOUT: the checker used more
-than 5 s of CPU: a problem to fix, not a limit to raise` (the spec path) or
-`<file>: the checker used more than 5 s of CPU: a problem to fix, not a limit
+than 10 s of CPU: a problem to fix, not a limit to raise` (the spec path) or
+`<file>: the checker used more than 10 s of CPU: a problem to fix, not a limit
 to raise` (the mutant path). A slow check is a problem in the Bend, not in this
 tool.
 
 A checker that waits without computing never reaches the CPU limit. A second
 limit stops it after 60 s of wall time and reports `the checker did not finish
 in 60 s of wall time: it waits instead of computing`. The checker runs as
-`/bin/sh -c 'ulimit -t 5 && exec bend …'`, so it needs a POSIX `/bin/sh`.
+`/bin/sh -c 'ulimit -t 10 && exec bend …'`, so it needs a POSIX `/bin/sh`.
 
 ---
 
@@ -686,7 +687,7 @@ Rules for a `counter`:
 - **A claim may not call a law or a proof def.** Only the core and the other
   imports are in scope, and the body is `{==}` — there is no proof to write.
 - **Keep the literals small.** The checker walks numerals down, and a big one
-  is slow, and may overrun the 5 s CPU limit.
+  is slow, and may overrun the 10 s CPU limit.
 - A counter that holds on the mutant is rejected, however true it is on the
   core: the law must be shown false, not merely unproved.
 
@@ -752,7 +753,7 @@ values exit 2. The CLI accepts `--jobs N` before or after the directory.
 Without the flag, the synchronous API and CLI behavior do not change.
 
 At most `jobs` **rows** run at once. Each row runs its checks in the order in
-§5, with the same short circuits and per-check limits (5 s of CPU, 60 s of wall time). Every check gets
+§5, with the same short circuits and per-check limits (10 s of CPU, 60 s of wall time). Every check gets
 fresh scratch; there is no cache or persistent checker. Dependencies in
 `with` still resolve against the entire table. Lines and the summary print
 in table order, even if a later row finishes first. Completed lines can wait
@@ -899,7 +900,7 @@ Every message the tool can print, and what it means.
 | --- | --- |
 | `COUNTEREXAMPLE <name>: expected <E> / observed <O>` | the instance `<name>` is false, and `<E>` is its **left** side with `<O>` its right. The claim `{C.plus0(3n) == 4n : Nat}` prints `COUNTEREXAMPLE plus0_three: expected 3n / observed 4n`: `3n` is what `C.plus0(3n)` evaluates to, `4n` is what the claim's right side says. So `observed` is your claim's right-hand side, not a description of a fault |
 | `<n> of <N> instances fail:` | `--each` found `<n>` failures, each printed with its claim |
-| `TIMEOUT: the checker used more than 5 s of CPU: a problem to fix, not a limit to raise` | an instance does not check in 5 s of CPU — a large constant, a loop unfolded into a goal |
+| `TIMEOUT: the checker used more than 10 s of CPU: a problem to fix, not a limit to raise` | an instance does not check in 10 s of CPU — a large constant, a loop unfolded into a goal |
 | `TIMEOUT: the checker did not finish in 60 s of wall time: it waits instead of computing` | the checker hangs without using CPU |
 | the checker's own output, with no `Location:` | the spec did not compile: a bad import path, or claim syntax the checker rejects. The imports are resolved against the **spec file's directory** |
 | `an import path of plain names (letters, digits, _ and -; the hub's files import the hub's)` | a directory in the spec's resolved path holds a dot, or another character outside that set. Give the project a plain-name path |
@@ -937,7 +938,7 @@ is not printed)
 | `FAIL: PROOF.bend: duplicate section header "# ---- <name> ----" (lines <a>, <b>); give each section its own name` | two `# ---- <name> ----` headers are identical. Both sections would be kept under one name and their text concatenated, so the proof would break somewhere that names neither. Every line the repeated header sits on is listed |
 | `<law>: no section "<section>" in PROOF.bend` | no `# ---- <section> ----` header with that exact text. Usually a header that does not match the format, or a `section` copied from another law |
 | `no mutant has the section "<sec>", so its law is unknown` | a `with` entry that names a section no mutant in the table has. Every name in `with` must be some row's `section` |
-| `<file>: the checker used more than 5 s of CPU: a problem to fix, not a limit to raise` | a check that does not finish in 5 s of CPU |
+| `<file>: the checker used more than 10 s of CPU: a problem to fix, not a limit to raise` | a check that does not finish in 10 s of CPU |
 | `<file>: the checker did not finish in 60 s of wall time: it waits instead of computing` | a checker that hangs without using CPU |
 | `bend: not found on PATH` | no `bend` on PATH |
 

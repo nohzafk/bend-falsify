@@ -1,18 +1,18 @@
 // The limits on one checker run, shared by the spec path and the mutant path.
 //
-// A check may use 5 s of CPU. The limit counts CPU time, not wall-clock time:
+// A check may use 10 s of CPU. The limit counts CPU time, not wall-clock time:
 // a loaded machine (several gates at once) stretches every check's wall time
 // without the Bend changing, and a wall-clock limit then fails checks at
-// random. CPU time is the sum over the checker's threads, so on an idle
-// machine a check reaches it in less than 5 s of wall time. A check past 5 s
-// of CPU is a problem to fix (a large constant, a fuel loop, application code
+// random. CPU time is the sum over the checker's threads (the checker uses
+// about two), so 10 s of CPU is about 5 s of wall time on an idle machine. A
+// check past 10 s of CPU is a problem to fix (a large constant, a fuel loop, application code
 // in a goal), not a limit to raise.
 //
 // A checker that waits instead of computing never reaches the CPU limit; a
 // wall-clock limit of 60 s stops it. BEND_FALSIFY_WALL_MS lowers it for this
 // repository's own tests of a hanging checker.
 
-export const CPU_S = 5;
+export const CPU_S = 10;
 export const WALL_MS = Number(process.env.BEND_FALSIFY_WALL_MS ?? 60_000);
 
 // `bend <args>` under the CPU limit. The shell execs bend, so the child is

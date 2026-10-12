@@ -265,20 +265,20 @@ test("row errors and later spawn errors cancel children already running before r
   } finally { f.remove(); }
 }, 20000);
 
-test("sync and async stop a checker past 5 s of CPU; async waits for every child's cleanup", () => {
+test("sync and async stop a checker past 10 s of CPU; async waits for every child's cleanup", () => {
   const f = fakeFixture();
   try {
     for (const mode of ["sync", "async"]) {
       f.reset();
       const before = performance.now();
       const r = invoke([runner, f.dir, mode, "4"], { ...f.env, CHECK_MODE: "spin" });
-      expect(r.code).toBe(1); expect(r.err).toContain("the checker used more than 5 s of CPU");
+      expect(r.code).toBe(1); expect(r.err).toContain("the checker used more than 10 s of CPU");
       if (mode === "async") expect(r.err).toContain("cleanup complete before rejection");
-      expect(performance.now() - before).toBeGreaterThanOrEqual(4900);
+      expect(performance.now() - before).toBeGreaterThanOrEqual(9900);
       expect(r.out).not.toContain("PASS:"); f.clean();
     }
   } finally { f.remove(); }
-}, 40000);
+}, 60000);
 
 test("a checker that waits without computing is stopped by the wall-clock limit", () => {
   const f = fakeFixture();
