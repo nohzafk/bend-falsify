@@ -500,7 +500,8 @@ export function isPlainValue(out: string): boolean {
   for (const m of bare.matchAll(/[A-Za-z_][A-Za-z0-9_.]*/g)) {
     const word = m[0];
     const after = bare[m.index! + word.length];
-    if (after === "{" && /^[A-Z]/.test(word)) continue;
+    // a constructor, possibly qualified by its module (`core.Sum{...}`)
+    if (after === "{" && /^[A-Z]/.test(word.split(".").pop()!)) continue;
     // a numeric suffix or exponent belongs to its number
     if (/^[0-9]/.test(bare[m.index! - 1] ?? "") ) continue;
     return false;

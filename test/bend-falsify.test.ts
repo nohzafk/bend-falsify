@@ -104,8 +104,8 @@ test("a != premise is split at its top-level !=, and only there", () => {
 });
 
 test("only a closed first-order value may stand for a side of a != premise", () => {
-  for (const ok of ["3n", 'Busy{3n, "a b"}', "[1n, 2n]", "(Idle{}, 'x')", "Pair{Idle{}, 2}"]) expect(isPlainValue(ok)).toBe(true);
-  for (const bad of ["", "g", "Nat", "x => x", "Busy{foo}", "Idle"]) expect(isPlainValue(bad)).toBe(false);
+  for (const ok of ["3n", 'Busy{3n, "a b"}', "[1n, 2n]", "(Idle{}, 'x')", "Pair{Idle{}, 2}", "core.Sum{core.Idle{}, None{}}"]) expect(isPlainValue(ok)).toBe(true);
+  for (const bad of ["", "g", "Nat", "x => x", "Busy{foo}", "Idle", "core.idle{}", "core.Idle"]) expect(isPlainValue(bad)).toBe(false);
 });
 
 test("an at row for a != premise passes, and an instance whose sides are equal is a false premise, not a pass", () => {
