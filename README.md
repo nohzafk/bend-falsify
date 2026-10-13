@@ -621,6 +621,30 @@ the law's claim and in the law's premises:
   refusal: it makes check 1 vacuous, and the run's line says so (§5). A law
   whose proof rewrites with a premise is still a law `at` states, as long as the
   claim does not read the premise's own name.
+- **A premise `{a != b : T}` works the same way**, but `{==}` cannot prove an
+  inequality (`{a != b : T}` is `{a == b : T} -> Empty`, and refuting a clash
+  needs a discriminator no generic term supplies), so the tool does not
+  prove it. It *runs* each side: for `a` and then `b` it writes
+  `def main() -> T: <side>` into the instance file, runs `bend` on it, and
+  compares the two printed values. Different values: the premise holds. Equal
+  values: the premise is false, reported exactly like a false `==` premise
+  (`premise false on the core`, or `... is false on the mutant ...`). Neither:
+  the premise is **undecided** and the row FAILs with
+  `the law's premise "h" cannot be decided on the core|mutant: <why>` — a side
+  that does not typecheck, a run that times out, hits the CPU limit or crashes
+  (these stop the run, as for every check), or a side whose printed form is not
+  a plain value. Nothing but two successfully printed, different values ever
+  counts as "they differ".
+
+  **What a passing `!=` check guarantees.** Both sides ran to closed
+  first-order values — constructors `Name{...}`, numbers, strings, characters,
+  lists, tuples; a bare name, a lambda or a type is refused — and the values
+  print differently. Distinct such values are distinct terms, so the sides are
+  not equal and the premise holds. It can be wrong only if the printer shows
+  two equal values differently or an irrelevant (erased, proof) field of a
+  constructor differently; the printer is the one trusted piece. The side's
+  type `T` must be written in the premise as `{a != b : T}` and be valid as a
+  `def main() -> T`.
 
 ### `counter`: the fallback
 

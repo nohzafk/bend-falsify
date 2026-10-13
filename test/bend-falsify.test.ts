@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Law, counterImports, duplicateSections, instanceDefName, instanceHead, lawInstance, missingImports, mutate, planImports, readLaw, relativeImports, rewriteImports, substitute } from "../src/mutants.ts";
+import { type Law, counterImports, isPlainValue, parseNeq, duplicateSections, instanceDefName, instanceHead, lawInstance, missingImports, mutate, planImports, readLaw, relativeImports, rewriteImports, substitute } from "../src/mutants.ts";
 
 const run = (file: string, ...args: string[]) => {
   const r = Bun.spawnSync(["bun", `${import.meta.dir}/${file}`, ...args]);
@@ -95,6 +95,40 @@ test("an at instance is checked in the laws' own file, defs and all", () => {
   const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/named`);
   expect(r.out).toContain("PASS: all 2 mutants");
   expect(r.code).toBe(0);
+});
+
+test("a != premise is split at its top-level !=, and only there", () => {
+  expect(parseNeq("{C.f(a) != s : C.Sum}")).toEqual({ a: "C.f(a)", b: "s", type: "C.Sum" });
+  expect(parseNeq('{F("!=") != (x : T) : T}')).toEqual({ a: 'F("!=")', b: "(x : T)", type: "T" });
+  expect(parseNeq("{a == b : T}")).toBeNull();
+});
+
+test("only a closed first-order value may stand for a side of a != premise", () => {
+  for (const ok of ["3n", 'Busy{3n, "a b"}', "[1n, 2n]", "(Idle{}, 'x')", "Pair{Idle{}, 2}"]) expect(isPlainValue(ok)).toBe(true);
+  for (const bad of ["", "g", "Nat", "x => x", "Busy{foo}", "Idle"]) expect(isPlainValue(bad)).toBe(false);
+});
+
+test("an at row for a != premise passes, and an instance whose sides are equal is a false premise, not a pass", () => {
+  const r = run("../src/falsify.ts", "mutants", `${import.meta.dir}/tree/neq`);
+  expect(r.out).toContain("plus0_off_five             PASS  false when plus0 adds one; fails in Laws.plus0_off_five\n");
+  expect(r.out).toContain('FAIL  the law\'s premise "h" is false on the mutant, so this instance is not a counterexample: {5n != 5n : Nat}');
+  expect(r.code).toBe(1);
+});
+
+test("a != premise whose side does not run is undecided, never read as different", () => {
+  const tmp = realpathSync(mkdtempSync(join(tmpdir(), "falsify-neq-")));
+  try {
+    cpSync(`${import.meta.dir}/tree/neq`, join(tmp, "p"), { recursive: true });
+    const rows = JSON.parse(readFileSync(join(tmp, "p/mutants.json"), "utf8")).slice(0, 1);
+    rows[0].at = { n: "no_such_name" };
+    writeFileSync(join(tmp, "p/mutants.json"), JSON.stringify(rows));
+    const r = run("../src/falsify.ts", "mutants", join(tmp, "p"));
+    expect(r.out).toContain("cannot be decided");
+    expect(r.out).not.toContain("PASS  false");
+    expect(r.code).toBe(1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("an at instance is built under the alias LAWS.bend uses", () => {

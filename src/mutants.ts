@@ -450,6 +450,64 @@ export function lawInstance(law: Law, at: Record<string, string>): Instance {
   return { claim: substitute(law.claim, at), premises };
 }
 
+// A premise `{a != b : T}` split into its two sides and its type, or null when
+// the equation is not one (an `==` premise, or anything else). Only a `!=` at
+// the top level of the braces counts: one inside a call or a string is part of
+// a side.
+export function parseNeq(eq: string): { a: string; b: string; type: string } | null {
+  const t = eq.trim();
+  if (!t.startsWith("{") || !t.endsWith("}")) return null;
+  const inner = t.slice(1, -1);
+  let depth = 0;
+  let neq = -1;
+  let colon = -1;
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i];
+    if (c === '"') { i = stringEnd(inner, i) - 1; continue; }
+    if (c === "(" || c === "[" || c === "{") depth += 1;
+    else if (c === ")" || c === "]" || c === "}") depth -= 1;
+    else if (depth === 0 && neq < 0 && inner.startsWith("!=", i)) { neq = i; i += 1; }
+    else if (depth === 0 && neq >= 0 && c === ":") { colon = i; break; }
+  }
+  if (neq < 0 || colon < 0) return null;
+  const a = inner.slice(0, neq).trim();
+  const b = inner.slice(neq + 2, colon).trim();
+  const type = inner.slice(colon + 1).trim();
+  if (a === "" || b === "" || type === "") return null;
+  return { a, b, type };
+}
+
+// Is the checker's printed result a closed first-order value? Only constructors
+// (`Name{...}`), numbers, strings, characters, lists, tuples and spaces may
+// appear. A bare name is a function, a type or a stuck term -- something whose
+// printed form says nothing about equality -- so it is refused.
+export function isPlainValue(out: string): boolean {
+  const s = out.trim();
+  if (s === "") return false;
+  let bare = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '"') { i = stringEnd(s, i) - 1; bare += " "; continue; }
+    if (c === "'") {
+      let j = i + 1;
+      while (j < s.length && s[j] !== "'") { if (s[j] === "\\") j += 1; j += 1; }
+      if (j >= s.length) return false;
+      i = j; bare += " "; continue;
+    }
+    bare += c;
+  }
+  if (/=>|->|@|%|\?/.test(bare)) return false;
+  for (const m of bare.matchAll(/[A-Za-z_][A-Za-z0-9_.]*/g)) {
+    const word = m[0];
+    const after = bare[m.index! + word.length];
+    if (after === "{" && /^[A-Z]/.test(word)) continue;
+    // a numeric suffix or exponent belongs to its number
+    if (/^[0-9]/.test(bare[m.index! - 1] ?? "") ) continue;
+    return false;
+  }
+  return true;
+}
+
 // The head of the file an `at` instance is checked in: LAWS.bend's own text,
 // with every law removed -- its imports, its defs and its comments stay. An
 // `at` instance is the law's statement as written, and a statement may name
@@ -569,6 +627,35 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
       instance: `${head}\n\ndef ${def}() -> ${claim}:\n  {==}\n` };
   }
 
+  // The printed value of `expr : type` on this core: the instance file with a
+  // `main` that returns it, run rather than only checked.
+  function evalValue(v: Variant, expr: string, type: string, kind: "at" | "counter"): CheckRequest {
+    const l = v.lawsText ?? laws;
+    const head = kind === "at" ? instanceHead(l) : counterImports(l);
+    return { ...v, file: "INSTANCE.bend", checkOnly: false,
+      instance: `${head}\n\ndef main() -> ${type}:\n  ${expr}\n` };
+  }
+
+  // Does this premise hold on this core? An `==` premise holds when the checker
+  // closes it. A `!=` premise holds when both sides run to closed first-order
+  // values whose printed forms differ; sides that print alike are equal, and
+  // anything else -- a run that failed, a side that is not a plain value -- is
+  // undecided, never "different".
+  function* premiseState(v: Variant, eq: string, kind: "at" | "counter"): Generator<CheckRequest, { state: "holds" | "false" | "undecided"; why: string }, CheckResult> {
+    const neq = parseNeq(eq);
+    if (neq === null) {
+      return (yield checkClaim(v, eq, kind)).ok ? { state: "holds", why: "" } : { state: "false", why: "" };
+    }
+    const outs: string[] = [];
+    for (const side of [neq.a, neq.b]) {
+      const r: CheckResult = yield evalValue(v, side, neq.type, kind);
+      if (!r.ran) return { state: "undecided", why: `the checker could not run ${side}` };
+      if (!isPlainValue(r.stdout)) return { state: "undecided", why: `${side} did not run to a plain value (it printed ${JSON.stringify(r.stdout.trim().slice(0, 60))})` };
+      outs.push(r.stdout.trim());
+    }
+    return outs[0] === outs[1] ? { state: "false", why: "" } : { state: "holds", why: "" };
+  }
+
   function proofChecks(v: Variant, m: Mutant, withLaws: [string, string][]): CheckRequest {
     const { head, secs } = sections(proof);
     const wanted = [m.section, ...withLaws.map(([, sec]) => sec)].map((x) => `# ---- ${x} ----`);
@@ -637,14 +724,18 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
     // so the row stays a checked claim. A `counter` carries no premise.
     let falseOnCore: Instance["premises"][number] | undefined;
     for (const p of premises) {
-      if (!(yield checkClaim(original, p.equation, kind)).ok) { falseOnCore = p; break; }
+      const st = yield* premiseState(original, p.equation, kind);
+      if (st.state === "undecided") return fail(`the law's premise "${p.binder}" cannot be decided on the core: ${st.why}: ${p.equation}`);
+      if (st.state === "false") { falseOnCore = p; break; }
     }
     if (falseOnCore === undefined && !(yield checkClaim(original, claim, kind)).ok) {
       return fail(`the counterexample is false on the core itself: ${claim}`);
     }
     let falsePremise: Instance["premises"][number] | undefined;
     for (const p of premises) {
-      if (!(yield checkClaim(mutated, p.equation, kind)).ok) { falsePremise = p; break; }
+      const st = yield* premiseState(mutated, p.equation, kind);
+      if (st.state === "undecided") return fail(`the law's premise "${p.binder}" cannot be decided on the mutant: ${st.why}: ${p.equation}`);
+      if (st.state === "false") { falsePremise = p; break; }
     }
     if (falsePremise) {
       return fail(`the law's premise "${falsePremise.binder}" is false on the mutant, so this instance is not a counterexample: ${falsePremise.equation}`);
@@ -681,11 +772,12 @@ interface CheckRequest {
   lawsText?: string;
   proofText?: string;
 }
-interface CheckResult { ok: boolean; location: string }
+interface CheckResult { ok: boolean; location: string; ran: boolean; stdout: string }
 interface RowResult { line: string; bad: boolean }
 
-function verdict(out: string): CheckResult {
-  return { ok: /^ALL PROOFS CHECK$/m.test(out), location: out.match(/^Location: (\S+)/m)?.[1] ?? "?" };
+function verdict(stdout: string, stderr: string, exitCode: number | null): CheckResult {
+  const out = stdout + stderr;
+  return { ok: /^ALL PROOFS CHECK$/m.test(out), location: out.match(/^Location: (\S+)/m)?.[1] ?? "?", ran: exitCode === 0, stdout };
 }
 function cpuError(file: string): Error { return new Error(`${file}: ${CPU_MESSAGE}`); }
 function wallError(file: string): Error { return new Error(`${file}: ${WALL_MESSAGE}`); }
@@ -713,7 +805,7 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
         if (r.signalCode === CPU_SIGNAL) throw cpuError(request.file);
         if (r.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
         if (r.signalCode) throw new Error(`${request.file}: checker stopped by ${r.signalCode}`);
-        result = verdict(r.stdout.toString() + r.stderr.toString());
+        result = verdict(r.stdout.toString(), r.stderr.toString(), r.exitCode);
       } finally {
         scratch.remove();
       }
@@ -770,7 +862,7 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
       if (child.signalCode === CPU_SIGNAL) throw cpuError(request.file);
       if (child.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
       if (child.signalCode) throw new Error(`${request.file}: checker stopped by ${child.signalCode}`);
-      return verdict(out + err);
+      return verdict(out, err, child.exitCode);
     } catch (error) {
       controller.abort(error);
       throw error;
