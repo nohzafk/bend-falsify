@@ -444,6 +444,12 @@ equation is false and the rest are batched again. A failure naming none of the
 batch's defs, or a batch past the CPU or wall limit, gives no verdict, and those
 equations are checked one by one.
 
+Check 4 runs on the same isolated file as check 5, not on the whole
+`PROOF.bend`, so the whole file passing does not stand in for it. A section
+whose `with` misses a law it uses checks in the whole file but not alone, and
+it can fail alone in exactly the def `failsIn` names; without check 4 on the
+isolated file that failure would count as a kill.
+
 Checks 1 to 3 are what make `why` a checked claim. A proof that fails on a
 mutant where the law still holds would otherwise count as a kill (check 3), and
 a proof that still checks against a false law would be saying nothing about the
