@@ -71,6 +71,18 @@ mv "$TMP/s" "$TMP/bad-claim/spec.json"
 bun src/falsify.ts "$TMP/bad-claim/spec.json" | grep -q "COUNTEREXAMPLE plus0_three" || { echo "FAIL: a false instance was not refused"; exit 1; }
 echo "  checks, and a broken spec is refused"
 
+# A law another law's proof uses needs no row of its own: `with` may name a
+# section after its law. A copy with the section renamed to its law's name and
+# that law's row removed still checks; naming a section no row has and no law
+# is called stops the run.
+cp -R examples/plus0 "$TMP/with-law"
+sed 's/^# ---- plus0 adds nothing ----$/# ---- plus0_same ----/' "$TMP/with-law/PROOF.bend" > "$TMP/p" && mv "$TMP/p" "$TMP/with-law/PROOF.bend"
+bun -e 'const f = process.argv[1]; const t = JSON.parse(await Bun.file(f).text()); const r = t.slice(1); r[1].with = ["plus0_same"]; await Bun.write(f, JSON.stringify(r));' "$TMP/with-law/mutants.json"
+bun src/falsify.ts mutants "$TMP/with-law" | grep -q "PASS: all 3 mutants" || { echo "FAIL: a with naming a law with no row"; exit 1; }
+sed 's/"plus0_same"\]/"plus0_gone"]/' "$TMP/with-law/mutants.json" > "$TMP/m" && mv "$TMP/m" "$TMP/with-law/mutants.json"
+bun src/falsify.ts mutants "$TMP/with-law" 2>&1 | grep -q 'no mutant has the section "plus0_gone", and LAWS.bend has no law of that name' || { echo "FAIL: a with naming nothing was not refused"; exit 1; }
+echo "  with names a law that has no row; a with naming nothing is refused"
+
 echo "== 4. the mutant table's refusals =="
 # The fixture's table, as it stands, runs: its laws import a directory two
 # levels up and a file one level up (`import ../shared.bend`), and the run has

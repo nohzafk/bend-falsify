@@ -723,11 +723,15 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
       proofText: head + kept.map(([h, b]) => h + b).join("") };
   }
 
-  // A section named in `with` is kept with the law whose section it is.
+  // A section named in `with` is kept with the law whose section it is: the
+  // law of a row with that section, or else the law of that name. A law needs
+  // no row of its own for another law's proof to use it.
+  const lawNames = new Set([...laws.matchAll(/^law (\S+):/gm)].map(([, n]) => n));
   const lawOf = (sec: string): [string, string] => {
     const owner = mutants.find((x) => x.section === sec);
-    if (!owner) throw new Error(`no mutant has the section "${sec}", so its law is unknown`);
-    return [owner.law, sec];
+    if (owner) return [owner.law, sec];
+    if (lawNames.has(sec)) return [sec, sec];
+    throw new Error(`no mutant has the section "${sec}", and LAWS.bend has no law of that name, so its law is unknown`);
   };
   function* row(m: Mutant): Generator<CheckRequest, RowResult, CheckResult> {
     const name = m.law.padEnd(26);

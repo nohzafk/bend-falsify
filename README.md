@@ -238,7 +238,10 @@ def Laws.plus0_same(n):
   first.
 - **A law whose proof uses another law's proof must say so**, with the
   `with` field. Otherwise its section is dropped and the run fails its own
-  control: `the proof does not check even unmutated (<location>)`.
+  control: `the proof does not check even unmutated (<location>)`. A name in
+  `with` is a section; its law is the law of the row with that section, or,
+  when no row has it, the law of that name. So a law needs no row of its own
+  for another law's proof to use it, provided its section is named after it.
 
 ```bend
 # ---- twice is the same ----
