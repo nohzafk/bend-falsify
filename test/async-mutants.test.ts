@@ -137,7 +137,10 @@ test("real children overlap, respect the row bound, preserve check order, and us
     const serial = invoke([runner, f.dir, "sync", "1"], f.env);
     expect(serial.code).toBe(0);
     expect(f.events().filter((e) => e.event === "start").map((e) => [e.file, e.mutated]))
-      .toEqual(Array.from({ length: 8 }, () => [["INSTANCE.bend", false], ["INSTANCE.bend", true], ["PROOF.bend", false], ["PROOF.bend", true]]).flat());
+      .toEqual([["INSTANCE.bend", false],
+        ["INSTANCE.bend", true], ["PROOF.bend", false], ["PROOF.bend", true],
+        // later rows differ only in n: their proof checks repeat row 0's and are not spawned again
+        ...Array.from({ length: 7 }, () => [["INSTANCE.bend", true]]).flat()]);
     f.clean();
     for (const jobs of [1, 2, 4]) {
       f.reset();
@@ -151,12 +154,14 @@ test("real children overlap, respect the row bound, preserve check order, and us
       expect(active).toBe(0);
       expect(maximum).toBe(jobs);
       const starts = f.events().filter((e) => e.event === "start");
-      expect(starts).toHaveLength(8 * 4);
+      // One batch for the eight claims on the core, eight claims on the mutant,
+      // and one original and one mutant proof for all rows.
+      expect(starts).toHaveLength(1 + 8 + 2);
       expect(new Set(starts.map((e) => e.cwd)).size).toBe(starts.length);
-      // Each row has two claims followed by the original and mutant proof.
-      expect(starts.filter((e) => e.file === "INSTANCE.bend").length).toBe(16);
-      expect(starts.filter((e) => e.file === "PROOF.bend" && !e.mutated).length).toBe(8);
-      expect(starts.filter((e) => e.file === "PROOF.bend" && e.mutated).length).toBe(8);
+      expect(starts.filter((e) => e.file === "INSTANCE.bend" && !e.mutated).length).toBe(1);
+      expect(starts.filter((e) => e.file === "INSTANCE.bend" && e.mutated).length).toBe(8);
+      expect(starts.filter((e) => e.file === "PROOF.bend" && !e.mutated).length).toBe(1);
+      expect(starts.filter((e) => e.file === "PROOF.bend" && e.mutated).length).toBe(1);
       f.clean();
     }
     f.reset();
@@ -206,9 +211,11 @@ test("checker banner is required even with exit zero; all semantic failures comp
     const env = { ...f.env, CHECK_MODE: "no-banner" };
     const serial = invoke([cli, "mutants", f.dir], env);
     expect(serial.code).toBe(1); expect(serial.out).toContain("FAIL: 8 of 8");
+    // the batch gives no verdict, so each claim is checked alone: 1 batch + 8
+    expect(f.events().filter((e) => e.event === "start")).toHaveLength(9);
     for (const jobs of [1, 2, 4]) {
       f.reset(); expect(invoke([cli, "mutants", f.dir, "--jobs", String(jobs)], env)).toEqual(serial);
-      expect(f.events().filter((e) => e.event === "start")).toHaveLength(8); f.clean();
+      expect(f.events().filter((e) => e.event === "start")).toHaveLength(9); f.clean();
     }
   } finally { f.remove(); }
 }, 30000);
@@ -243,7 +250,7 @@ test("spawn errors, checker signals, and API cancellation leave no children or s
     const cancelled = invoke([runner, f.dir, "abort", "2"], { ...f.env, CHECK_MODE: "hang" });
     expect(cancelled.code).toBe(1); expect(cancelled.err).toContain("fixture cancelled");
     expect(cancelled.err).toContain("cleanup complete before rejection");
-    expect(f.events().filter((e) => e.event === "start")).toHaveLength(2); f.clean();
+    expect(f.events().filter((e) => e.event === "start")).toHaveLength(1); f.clean();
   } finally { f.remove(); }
 }, 20000);
 
@@ -261,7 +268,8 @@ test("row errors and later spawn errors cancel children already running before r
     const spawnError = invoke([runner, f.dir, "async", "4"], { ...f.env, CHECK_MODE: "spawn-later" });
     expect(spawnError.code).toBe(1); expect(spawnError.err).toContain("cleanup complete before rejection");
     expect(spawnError.out).not.toContain("PASS:");
-    expect(f.events().filter((e) => e.event === "start")).toHaveLength(4); f.clean();
+    // the batch is the first check to finish and removes the checker
+    expect(f.events().filter((e) => e.event === "start")).toHaveLength(1); f.clean();
   } finally { f.remove(); }
 }, 20000);
 
@@ -312,7 +320,7 @@ test("dedicated CLI subprocess handles SIGINT and SIGTERM before exiting", async
         env: { ...f.env, CHECK_MODE: "hang" }, stdout: "pipe", stderr: "pipe", timeout: 10000,
       });
       try {
-        await waitForStarts(f, 2);
+        await waitForStarts(f, 1);
         p.kill(signal);
         const [out, err, exit] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
         expect(exit).toBe(code); expect(err).toContain(`interrupted by ${signal}`);

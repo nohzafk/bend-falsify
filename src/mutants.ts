@@ -14,6 +14,18 @@
 //   4. the proof checks on the core as it is              (the control)
 //   5. the proof fails on the mutated core, in `failsIn`  (it depends on it)
 //
+// Identical requests run once per run (same scratch texts, same file, same
+// checkOnly): the control of a law is checked once however many rows target it,
+// and rows asking at the same moment share one spawn. The `==` equations of
+// checks 1 (premises and claim, on the unmutated core) are also batched:
+// equations with the same instance head go into one INSTANCE.bend as separate
+// defs and are checked by one `--check-only` call. The checker stops at the
+// first failing def and names it, so that def's equation is false, and the rest
+// are batched again without it. A failure that names none of the batch's defs,
+// or a batch that hits the CPU or wall limit, gives no verdict: those equations
+// are checked one by one, as before. Every row's verdict is what a single check
+// of each equation would give.
+//
 // Checks 1 to 3 make `why` a checked claim: a proof that fails on a mutant
 // where the law still holds would otherwise count as a kill. A proof that
 // still checks against a false law would be saying nothing about the core.
@@ -620,12 +632,54 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
   // it holds exactly when both sides reduce to the same term. `file` is the
   // instance file's head and the name the instance is appended as: the two
   // namespaces above differ in nothing else.
+  const headOf = (l: string, kind: "at" | "counter"): string => (kind === "at" ? instanceHead(l) : counterImports(l));
+  const defOf = (head: string, kind: "at" | "counter"): string => (kind === "at" ? instanceDefName(head) : "counter");
   function checkClaim(v: Variant, claim: string, kind: "at" | "counter"): CheckRequest {
-    const l = v.lawsText ?? laws;
-    const head = kind === "at" ? instanceHead(l) : counterImports(l);
-    const def = kind === "at" ? instanceDefName(head) : "counter";
+    const head = headOf(v.lawsText ?? laws, kind);
     return { ...v, file: "INSTANCE.bend", checkOnly: true,
-      instance: `${head}\n\ndef ${def}() -> ${claim}:\n  {==}\n` };
+      instance: `${head}\n\ndef ${defOf(head, kind)}() -> ${claim}:\n  {==}\n` };
+  }
+
+  // The `==` equations every row checks on the unmutated core (its `==`
+  // premises and its claim), grouped by instance head; one group can be
+  // checked as one file. Each item carries the request a row will make for it.
+  function equationGroups(): EquationGroup[] {
+    const groups = new Map<string, EquationGroup>();
+    const original: Variant = { coreText: core };
+    for (const m of mutants) {
+      let kind: "at" | "counter";
+      let eqs: string[];
+      if (m.at !== undefined) {
+        kind = "at";
+        try {
+          const inst = lawInstance(readLaw(laws, m.law), m.at);
+          eqs = [...inst.premises.map((p) => p.equation).filter((e) => parseNeq(e) === null), inst.claim];
+        } catch { continue; }
+      } else if (m.counter) {
+        kind = "counter";
+        eqs = [m.counter];
+      } else continue;
+      const head = headOf(laws, kind);
+      const key = `${kind}\0${head}`;
+      let g = groups.get(key);
+      if (!g) { g = { head, base: defOf(head, kind), items: [] }; groups.set(key, g); }
+      for (const eq of eqs) {
+        const request = checkClaim(original, eq, kind);
+        if (!g.items.some((i) => i.request.instance === request.instance)) g.items.push({ claim: eq, request });
+      }
+    }
+    return [...groups.values()];
+  }
+
+  // One file holding every claim as its own def, and the def names in order.
+  // The names are the group's base plus a number, and the head declares none
+  // of them.
+  function batchInstance(g: EquationGroup, claims: string[]): { request: CheckRequest; names: string[] } {
+    let prefix = `${g.base}_q`;
+    while (new RegExp(`^def ${prefix}\\d+\\b`, "m").test(g.head)) prefix += "_";
+    const names = claims.map((_, i) => `${prefix}${i}`);
+    const defs = claims.map((c, i) => `def ${names[i]}() -> ${c}:\n  {==}\n`).join("\n");
+    return { request: { coreText: core, file: "INSTANCE.bend", checkOnly: true, instance: `${g.head}\n\n${defs}` }, names };
   }
 
   // The printed value of `expr : type` on this core: the instance file with a
@@ -758,7 +812,7 @@ function prepareRun(projectDir: string, mutants: Mutant[]) {
     const shared = failsInShared(proof, m.failsIn) ? "  (fails in a shared lemma, not the law's own section)" : "";
     return { line: `  ${name} PASS  false when ${m.why}; fails in ${m.failsIn}${loose}${falseOnCore ? "  (premise false on the core)" : ""}${shared}`, bad: false };
   }
-  return { row, scratch };
+  return { row, scratch, equationGroups, batchInstance };
 }
 
 // The texts a check reads in place of the originals: the core, LAWS.bend, or
@@ -774,6 +828,13 @@ interface CheckRequest {
   proofText?: string;
 }
 interface CheckResult { ok: boolean; location: string; ran: boolean; stdout: string }
+interface EquationGroup { head: string; base: string; items: { claim: string; request: CheckRequest }[] }
+// Equations per batched file: a file of many equations costs the checker more
+// CPU than any one of them, and a batch past the limit is checked one by one.
+const BATCH_SIZE = 16;
+function requestKey(r: CheckRequest): string {
+  return JSON.stringify([r.coreText, r.chain ?? null, r.file, r.checkOnly, r.instance ?? null, r.lawsText ?? null, r.proofText ?? null]);
+}
 interface RowResult { line: string; bad: boolean }
 
 function verdict(stdout: string, stderr: string, exitCode: number | null): CheckResult {
@@ -793,23 +854,51 @@ export function runMutants(projectDir: string, mutants: Mutant[]): void {
   const run = prepareRun(projectDir, mutants);
   if (!run) process.exit(1);
   let bad = 0;
+  const cache = new Map<string, CheckResult>();
+  function spawnCheck(request: CheckRequest): CheckResult {
+    const scratch = run!.scratch(request);
+    try {
+      const r = Bun.spawnSync(bendCommand([request.file, ...(request.checkOnly ? ["--check-only"] : [])]), { cwd: scratch.dir, timeout: WALL_MS });
+      if (r.exitedDueToTimeout) throw wallError(request.file);
+      if (r.signalCode === CPU_SIGNAL) throw cpuError(request.file);
+      if (r.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
+      if (r.signalCode) throw new Error(`${request.file}: checker stopped by ${r.signalCode}`);
+      return verdict(r.stdout.toString(), r.stderr.toString(), r.exitCode);
+    } finally {
+      scratch.remove();
+    }
+  }
+  // Batch the unmutated core's `==` equations, as runMutantsAsync does; a
+  // batch that fails to run (a limit, say) gives no verdict.
+  for (const g of run.equationGroups()) {
+    for (let at = 0; at < g.items.length; at += BATCH_SIZE) {
+      let pending = g.items.slice(at, at + BATCH_SIZE);
+      while (pending.length >= 2) {
+        const { request, names } = run.batchInstance(g, pending.map((i) => i.claim));
+        let r: CheckResult;
+        try { r = spawnCheck(request); } catch { break; }
+        const seed = (item: { request: CheckRequest }, ok: boolean, location: string) => {
+          const key = requestKey(item.request);
+          if (!cache.has(key)) cache.set(key, { ok, location, ran: true, stdout: "" });
+        };
+        if (r.ok) { for (const item of pending) seed(item, true, "?"); break; }
+        const idx = names.indexOf(r.location);
+        if (idx < 0) break;
+        seed(pending[idx], false, r.location);
+        pending = pending.filter((_, i) => i !== idx);
+      }
+    }
+  }
   for (const m of mutants) {
     const row = run.row(m);
     let step = row.next();
     while (!step.done) {
       const request = step.value;
-      const scratch = run.scratch(request);
-      let result: CheckResult;
-      try {
-        const r = Bun.spawnSync(bendCommand([request.file, ...(request.checkOnly ? ["--check-only"] : [])]), { cwd: scratch.dir, timeout: WALL_MS });
-        if (r.exitedDueToTimeout) throw wallError(request.file);
-        if (r.signalCode === CPU_SIGNAL) throw cpuError(request.file);
-        if (r.exitCode === NOT_FOUND) throw new Error(NOT_FOUND_MESSAGE);
-        if (r.signalCode) throw new Error(`${request.file}: checker stopped by ${r.signalCode}`);
-        result = verdict(r.stdout.toString(), r.stderr.toString(), r.exitCode);
-      } finally {
-        scratch.remove();
-      }
+      const key = requestKey(request);
+      const hit = cache.get(key);
+      if (hit) { step = row.next(hit); continue; }
+      const result = spawnCheck(request);
+      cache.set(key, result);
       step = row.next(result);
     }
     console.log(step.value.line);
@@ -842,7 +931,18 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
   let bad = 0;
   const results: (RowResult | undefined)[] = new Array(mutants.length);
 
-  async function check(request: CheckRequest): Promise<CheckResult> {
+  // Identical requests share one result, and one spawn while it is running.
+  const cache = new Map<string, Promise<CheckResult>>();
+  function check(request: CheckRequest): Promise<CheckResult> {
+    const key = requestKey(request);
+    let p = cache.get(key);
+    if (!p) { p = spawnCheck(request, false); cache.set(key, p); }
+    return p;
+  }
+
+  // `soft`: a failure of this spawn (a limit, say) is the caller's to handle
+  // and does not stop the run.
+  async function spawnCheck(request: CheckRequest, soft: boolean): Promise<CheckResult> {
     controller.signal.throwIfAborted();
     const scratch = run!.scratch(request);
     let child: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
@@ -865,7 +965,7 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
       if (child.signalCode) throw new Error(`${request.file}: checker stopped by ${child.signalCode}`);
       return verdict(out, err, child.exitCode);
     } catch (error) {
-      controller.abort(error);
+      if (!soft || controller.signal.aborted) controller.abort(error);
       throw error;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -876,6 +976,40 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
         scratch.remove();
       }
     }
+  }
+
+  // Check the unmutated core's `==` equations in batches and seed the cache
+  // with each verdict the batch gives; the rest are left to the rows.
+  async function batchEquations(): Promise<void> {
+    const jobsList: (() => Promise<void>)[] = [];
+    for (const g of run!.equationGroups()) {
+      for (let at = 0; at < g.items.length; at += BATCH_SIZE) {
+        const chunk = g.items.slice(at, at + BATCH_SIZE);
+        if (chunk.length < 2) continue;
+        jobsList.push(async () => {
+          let pending = chunk;
+          while (pending.length >= 2) {
+            const { request, names } = run!.batchInstance(g, pending.map((i) => i.claim));
+            let r: CheckResult;
+            try { r = await spawnCheck(request, true); }
+            catch (error) { if (controller.signal.aborted) throw error; return; }
+            const seed = (item: { request: CheckRequest }, ok: boolean, location: string) => {
+              const key = requestKey(item.request);
+              if (!cache.has(key)) cache.set(key, Promise.resolve({ ok, location, ran: true, stdout: "" }));
+            };
+            if (r.ok) { for (const item of pending) seed(item, true, "?"); return; }
+            const idx = names.indexOf(r.location);
+            if (idx < 0) return;
+            seed(pending[idx], false, r.location);
+            pending = pending.filter((_, i) => i !== idx);
+          }
+        });
+      }
+    }
+    let n = 0;
+    await Promise.all(Array.from({ length: Math.min(jobs, jobsList.length) }, async () => {
+      for (let i = n++; i < jobsList.length; i = n++) { controller.signal.throwIfAborted(); await jobsList[i](); }
+    }));
   }
 
   async function worker(): Promise<void> {
@@ -900,6 +1034,7 @@ export async function runMutantsAsync(projectDir: string, mutants: Mutant[], opt
     }
   }
   try {
+    try { await batchEquations(); } catch (error) { controller.abort(error); }
     await Promise.allSettled(Array.from({ length: Math.min(jobs, mutants.length) }, worker));
     controller.signal.throwIfAborted();
     summary(bad, mutants.length);

@@ -11,7 +11,7 @@ else {
   if (mode === "abort") {
     timer = setInterval(() => {
       const log = readFileSync(process.env.CHECK_LOG!, "utf8");
-      if (log.trim().split("\n").length >= 2) controller.abort(new Error("fixture cancelled"));
+      if (log.trim().split("\n").filter(Boolean).length >= 1) controller.abort(new Error("fixture cancelled"));
     }, 10);
   } else if (mode === "preabort") controller.abort(new Error("fixture pre-cancelled"));
   try {

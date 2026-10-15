@@ -435,6 +435,15 @@ what make the counterexample an instance of the law.
 | 4 | the law's proof checks on the core as it is | `the proof does not check even unmutated (<location>)` |
 | 5 | the proof fails on the mutated core, in `failsIn` | `still checks when <why>`, or `failed in <loc>, not <failsIn>, when <why>` |
 
+The run spawns fewer checkers than that table suggests, with the same verdicts:
+a check whose files, target and mode equal an earlier one's reuses its result
+(the control of a law runs once however many rows target it), and the `==`
+equations of check 1 are checked many to a file, one `--check-only` call for a
+group of them. The checker stops at the first false def and names it; that
+equation is false and the rest are batched again. A failure naming none of the
+batch's defs, or a batch past the CPU or wall limit, gives no verdict, and those
+equations are checked one by one.
+
 Checks 1 to 3 are what make `why` a checked claim. A proof that fails on a
 mutant where the law still holds would otherwise count as a kill (check 3), and
 a proof that still checks against a false law would be saying nothing about the
